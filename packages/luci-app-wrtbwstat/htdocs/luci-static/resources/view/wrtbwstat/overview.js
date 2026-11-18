@@ -75,6 +75,16 @@ const ZH = {
 	'Database directory is on tmpfs ({dir}), history will be lost after reboot.': '数据库目录位于 tmpfs（{dir}），重启后历史数据会丢失。',
 	'nf_conntrack_acct is disabled, counters may be missing or low.': '未开启 nf_conntrack_acct，流量计数可能缺失或偏低。',
 	'A fullcone NAT module was detected, conntrack events may not reach nlbwmon.': '检测到 fullcone NAT 模块，conntrack 事件可能无法送达 nlbwmon。',
+	'fullcone and nlbwmon are mutually exclusive on this firmware: once the module is loaded, statistics stay at zero. The fix turns off fullcone NAT (affects NAT type for P2P and online games) and disables the kernel module. It only changes files and never reboots the router; a manual reboot is required.': 'fullcone 与 nlbwmon 在本固件上互斥：模块一旦加载，统计会一直是 0。修复会关闭 fullcone NAT（影响 P2P / 游戏联机的 NAT 类型）并禁用该内核模块。操作只改文件、不会自动重启，需要你手动重启路由器才生效。',
+	'fullcone is disabled; conntrack events resume after the router reboots.': 'fullcone 已禁用，重启路由器后 conntrack 事件才会恢复。',
+	'Reboot the router manually (System → Reboot); statistics resume after that. Counters before the reboot are not recovered.': '请手动重启路由器（系统 → 重启）后恢复统计；重启前的计数不会补回。',
+	'Original files are backed up in {dir}; run restore.sh there to undo the change.': '原始文件已备份到 {dir}，可运行其中的 restore.sh 回退（需手动重启）。',
+	'Fix automatically': '一键修复',
+	'Fixing…': '正在修复…',
+	'Fix failed. Check the system log for details.': '修复失败，请检查系统日志。',
+	'Backup failed; nothing was changed. Check free space and try again.': '备份失败，未做任何修改。请检查存储空间后重试。',
+	'Confirmation is required to apply the fix.': '需要确认后才能执行修复。',
+	'fullcone support is built into this firmware kernel and cannot be disabled automatically.': '该固件的 fullcone 已编译进内核，无法自动禁用，请改用不含 fullcone 的固件。',
 	'nlbwmon has no local_network configured, no traffic will be counted.': 'nlbwmon 未配置 local_network，可能统计不到任何网段。',
 	'Database directory must not be empty.': '数据库目录不能为空。',
 	'Database directory must not be on tmpfs (/tmp, /var) or the root directory, otherwise history is lost after reboot.': '数据库目录不能位于 tmpfs（/tmp、/var）或根目录，否则重启后会丢失历史。',
@@ -129,6 +139,12 @@ const callSetSettings = rpc.declare({
 const callResetDatabase = rpc.declare({
 	object: 'luci.wrtbwstat',
 	method: 'reset_database',
+	params: [ 'confirm' ]
+});
+
+const callFixFullcone = rpc.declare({
+	object: 'luci.wrtbwstat',
+	method: 'fix_fullcone',
 	params: [ 'confirm' ]
 });
 
@@ -188,6 +204,7 @@ return view.extend({
 			getSettings: callGetSettings,
 			setSettings: callSetSettings,
 			resetDatabase: callResetDatabase,
+			fixFullcone: callFixFullcone,
 			addPoll: poll.add,
 			// 文案在 view 侧用 _() 注入：LuCI 的翻译扫描器不解析 .vue 文件
 			i18n: {
@@ -251,6 +268,13 @@ return view.extend({
 				warnTmpfs: T('Database directory is on tmpfs ({dir}), history will be lost after reboot.'),
 				warnAcctOff: T('nf_conntrack_acct is disabled, counters may be missing or low.'),
 				warnFullcone: T('A fullcone NAT module was detected, conntrack events may not reach nlbwmon.'),
+				warnFullconeAction: T('fullcone and nlbwmon are mutually exclusive on this firmware: once the module is loaded, statistics stay at zero. The fix turns off fullcone NAT (affects NAT type for P2P and online games) and disables the kernel module. It only changes files and never reboots the router; a manual reboot is required.'),
+				warnFullconeReboot: T('fullcone is disabled; conntrack events resume after the router reboots.'),
+				warnFullconeRebootHint: T('Reboot the router manually (System → Reboot); statistics resume after that. Counters before the reboot are not recovered.'),
+				backupHint: T('Original files are backed up in {dir}; run restore.sh there to undo the change.'),
+				fixFullcone: T('Fix automatically'),
+				fixingFullcone: T('Fixing…'),
+				fixFullconeFailed: T('Fix failed. Check the system log for details.'),
 				warnNoLocalNet: T('nlbwmon has no local_network configured, no traffic will be counted.'),
 				errDirEmpty: T('Database directory must not be empty.'),
 				errDirTmpfs: T('Database directory must not be on tmpfs (/tmp, /var) or the root directory, otherwise history is lost after reboot.'),
@@ -259,6 +283,9 @@ return view.extend({
 				errCommit: T('Commit interval must look like 6h or 30m.'),
 				errWrite: T('Failed to write configuration: {detail}'),
 				errConfirm: T('confirm=true is required to clear the database.'),
+				errFixConfirm: T('Confirmation is required to apply the fix.'),
+				errBackupFailed: T('Backup failed; nothing was changed. Check free space and try again.'),
+				errFullconeBuiltin: T('fullcone support is built into this firmware kernel and cannot be disabled automatically.'),
 				errDirUnavailable: T('Database directory is not configured or not usable, aborted.'),
 				errInvalidMac: T('Invalid MAC address.')
 			}

@@ -35,6 +35,7 @@ if (phase == 'read') {
 	let st = methods.get_settings.call({ args: {} });
 	printf("%.J\n", st);
 	check('settings.storage_dir', st.storage_dir, '/srv/nlbw');
+	check('settings.data_dir', st.data_dir, '/srv/nlbw/wrtbwstat');
 	check('settings.retention_days', st.retention_days, 95);
 	check('settings.compress', st.compress, true);
 	check('collector.generations', st.collector.generations, 95);
@@ -201,9 +202,54 @@ else {
 	let reset = methods.reset_database.call({ args: { confirm: true } });
 	printf("  reset -> %.J\n", reset);
 	check('reset.success', reset.success, true);
-	check('reset.removed', reset.removed, 2);
+	check('reset.removed', reset.removed, 3);
 	check('reset.freed_bytes', reset.freed_bytes > 0, true);
-	check('reset.directory', reset.directory, '/srv/nlbw');
+	check('reset.directory', reset.directory, '/srv/nlbw/wrtbwstat');
+
+	printf("\n### fix_fullcone\n");
+	let fcDeny = methods.fix_fullcone.call({ args: { confirm: false } });
+	check('fix.denied_without_confirm', fcDeny.success, false);
+	check('fix.denied_code', fcDeny.message.code, 'errFixConfirm');
+
+	let fix = methods.fix_fullcone.call({ args: { confirm: true } });
+	printf("  fix -> %.J\n", fix);
+	check('fix.success', fix.success, true);
+	// 容器里没有 /sys/module/nft_fullcone，等价于"模块尚未加载"
+	check('fix.reboot_required', fix.reboot_required, false);
+	check('fix.ko_disabled', !!access('/lib/modules/fl-test/nft_fullcone.ko.disabled'), true);
+	check('fix.ko_gone', !!access('/lib/modules/fl-test/nft_fullcone.ko'), false);
+	check('fix.modules_d_disabled', !!access('/etc/modules.d/nft-fullcone.disabled'), true);
+
+	// 改文件前必须留备份，且备份里要有可执行的恢复脚本
+	check('fix.backup_dir', type(fix.backup_dir) == 'string' && length(fix.backup_dir) > 20, true);
+	check('fix.backup_firewall', !!access(fix.backup_dir + '/firewall'), true);
+	check('fix.backup_modules_d', !!access(fix.backup_dir + '/nft-fullcone'), true);
+	check('fix.backup_ko', !!access(fix.backup_dir + '/nft_fullcone.ko'), true);
+	check('fix.backup_restore_script', !!access(fix.backup_dir + '/restore.sh'), true);
+	check('fix.backup_marker', trim(readfile('/etc/wrtbwstat/fullcone-backup') ?? ''), fix.backup_dir);
+
+	let fwctx = cursor();
+	fwctx.load('firewall');
+	check('fix.firewall_fullcone_off', fwctx.get('firewall', '@defaults[0]', 'fullcone'), '0');
+	check('fix.firewall_fullcone6_off', fwctx.get('firewall', '@defaults[0]', 'fullcone6'), '0');
+
+	// 重复执行必须安全（用户可能连点两次），已改过的项不再重复备份
+	let again = methods.fix_fullcone.call({ args: { confirm: true } });
+	check('fix.idempotent', again.success, true);
+	check('fix.idempotent_failed', length(again.failed), 0);
+	check('fix.idempotent_noop', length(again.changed), 0);
+	check('fix.idempotent_no_backup', again.backup_dir, null);
+
+	// 备份里的 restore.sh 必须真的能把三处改动还原
+	let restore = run(sprintf('sh %s', fix.backup_dir + '/restore.sh'));
+	check('fix.restore_rc', restore.rc, 0);
+
+	let rctx = cursor();
+	rctx.load('firewall');
+	check('fix.restore_firewall', rctx.get('firewall', '@defaults[0]', 'fullcone'), '1');
+	check('fix.restore_ko', !!access('/lib/modules/fl-test/nft_fullcone.ko'), true);
+	check('fix.restore_ko_disabled_gone', !!access('/lib/modules/fl-test/nft_fullcone.ko.disabled'), false);
+	check('fix.restore_modules_d', !!access('/etc/modules.d/nft-fullcone'), true);
 
 	printf("\n### 容量保护：超阈值裁剪\n");
 	let capDir = '/tmp/capdb';

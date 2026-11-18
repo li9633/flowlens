@@ -19,12 +19,14 @@
 			"ubus": {
 				"luci.wrtbwstat": [
 					"set_settings",
-					"reset_database"
+					"reset_database",
+					"fix_fullcone"
 				]
 			},
 			"uci": [
 				"wrtbwstat",
-				"nlbwmon"
+				"nlbwmon",
+				"firewall"
 			],
 			"file": {
 				"/etc/sysctl.d/99-wrtbwstat.conf": [ "write" ]
