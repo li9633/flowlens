@@ -39,6 +39,11 @@ export function useSettingsForm(api, t) {
 	}
 
 	async function save() {
+		// 重入保护：按钮 disabled 要等 Vue 下次渲染才生效，
+		// 同一帧内的双击仍会进到这里，靠这个闸门挡住重复写配置。
+		if (saving.value || resetting.value)
+			return false;
+
 		saving.value = true;
 		errors.value = [];
 		notice.value = '';
@@ -70,6 +75,10 @@ export function useSettingsForm(api, t) {
 	}
 
 	async function resetDatabase() {
+		// 同上：清库是破坏性写操作，绝不允许并发或重复进入
+		if (resetting.value || saving.value)
+			return false;
+
 		if (!confirmReset.value) {
 			errors.value = [ t('resetNeedConfirm') ];
 			return false;

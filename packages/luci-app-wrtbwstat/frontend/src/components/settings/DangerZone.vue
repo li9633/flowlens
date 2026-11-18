@@ -9,7 +9,9 @@ import { useI18n } from '../../composables/useI18n.js';
 defineProps({
 	// nlbwmon 实际在用的目录，与配置值可能不同，先展示出来让用户有判断依据
 	directory: { type: String, default: '' },
-	resetting: { type: Boolean, default: false }
+	// resetting / saving 任一进行中都要锁住清库按钮，避免写操作交叉
+	resetting: { type: Boolean, default: false },
+	saving: { type: Boolean, default: false }
 });
 
 const confirm = defineModel({ type: Boolean, default: false });
@@ -28,7 +30,7 @@ const { t } = useI18n();
 		<BaseCheckbox v-model="confirm">{{ t('resetConfirm') }}</BaseCheckbox>
 
 		<div class="fl-danger-actions">
-			<BaseButton variant="danger" :disabled="resetting || !confirm" @click="emit('reset')">
+			<BaseButton variant="danger" :disabled="resetting || saving || !confirm" @click="emit('reset')">
 				{{ t('resetDb') }}
 			</BaseButton>
 		</div>

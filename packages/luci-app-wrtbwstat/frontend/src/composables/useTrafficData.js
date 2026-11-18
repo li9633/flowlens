@@ -37,15 +37,40 @@ export function useTrafficData(api, t) {
 		return updated.value ? formatTime(updated.value) : '';
 	});
 
-	async function load() {
-		loading.value = true;
+	// 并发保护：连续点击时间窗 / 排序时只认最后一次请求，
+	// 避免先发后到的响应把新结果覆盖掉（典型场景：快速点「昨天」再点「近7天」）。
+	let loadSeq = 0;
+
+	/**
+	 * 拉取汇总与设备列表。
+	 *
+	 * silent: 轮询刷新用——不点亮 loading，避免每 30 秒闪一次蒙层；
+	 * 用户主动操作（切时间窗 / 排序 / 搜索 / 改设置）才展示加载态。
+	 */
+	async function load(options) {
+		const silent = options?.silent === true;
+		const seq = ++loadSeq;
+
+		// 参数在发起时快照，避免响应回来时按"当前"选择误判归属
+		const params = {
+			range: range.value,
+			sort: sort.value,
+			keyword: keyword.value
+		};
+
+		if (!silent)
+			loading.value = true;
+
 		error.value = '';
 
 		try {
 			const [ s, d ] = await Promise.all([
-				api.getSummary(range.value),
-				api.getDevices(range.value, sort.value, keyword.value)
+				api.getSummary(params.range),
+				api.getDevices(params.range, params.sort, params.keyword)
 			]);
+
+			if (seq !== loadSeq)
+				return;
 
 			summary.value = Array.isArray(s?.ranges) ? s.ranges : [];
 			devices.value = Array.isArray(d?.devices) ? d.devices : [];
@@ -53,10 +78,14 @@ export function useTrafficData(api, t) {
 			updated.value = Number(s?.updated ?? 0);
 		}
 		catch (e) {
+			if (seq !== loadSeq)
+				return;
+
 			error.value = e?.message || t('error');
 		}
 		finally {
-			loading.value = false;
+			if (!silent && seq === loadSeq)
+				loading.value = false;
 		}
 	}
 
@@ -83,7 +112,7 @@ export function useTrafficData(api, t) {
 			const interval = Number(settings?.refresh_interval ?? 0);
 
 			if (interval > 0 && typeof api.addPoll === 'function')
-				api.addPoll(load, interval);
+				api.addPoll(function() { return load({ silent: true }); }, interval);
 		}
 		catch (e) {
 			/* 静默：不自动刷新即可 */

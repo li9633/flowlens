@@ -1,6 +1,7 @@
 <script setup>
 import RangeCard from './RangeCard.vue';
 import BaseEmpty from '../ui/BaseEmpty.vue';
+import BaseLoading from '../ui/BaseLoading.vue';
 import BasePanel from '../ui/BasePanel.vue';
 import { useI18n } from '../../composables/useI18n.js';
 
@@ -19,7 +20,7 @@ const { t } = useI18n();
 
 <template>
 	<BasePanel v-if="loading">
-		<BaseEmpty :text="t('loading')" />
+		<BaseLoading :label="t('loading')" />
 	</BasePanel>
 
 	<BasePanel v-else-if="summary.length === 0">

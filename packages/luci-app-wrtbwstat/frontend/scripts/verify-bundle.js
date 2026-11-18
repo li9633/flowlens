@@ -252,6 +252,90 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 		if (!pass) ok = false;
 	}
 
+	// 并发回归：先点「昨天」（慢响应）再点「今天」（快响应），
+	// 先发后到的旧响应不能覆盖新结果，加载态也要在最后一次请求结束时收掉。
+	const el3 = window.document.createElement('div');
+	window.document.body.appendChild(el3);
+
+	const raceApi = Object.assign({}, api, {
+		getDevices: async (activeRange) => {
+			await wait(activeRange === 'yesterday' ? 600 : 20);
+			return {
+				devices: [ {
+					mac: 'de:ad:be:ef:00:' + (activeRange === 'yesterday' ? '99' : '9a'),
+					hostname: 'race-' + activeRange,
+					ip: '192.168.2.99',
+					unknown_source: false,
+					rx_bytes: 1024, tx_bytes: 0, total_bytes: 1024
+				} ]
+			};
+		}
+	});
+
+	window.WrtbwstatApp.mount(el3, raceApi);
+	await wait(200);
+
+	const clickTab = (label) => {
+		const tab = Array.from(el3.querySelectorAll('[role="tab"]'))
+			.find((b) => b.textContent.trim() === label);
+		if (!tab) return false;
+		tab.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+		return true;
+	};
+
+	const clickedSlow = clickTab('Yesterday');
+	await wait(30);
+	const clickedFast = clickTab('Today');
+	await wait(900);
+
+	const raceHtml = el3.innerHTML;
+	for (const [ name, pass ] of Object.entries({
+		'并发：能点到慢/快两个时间窗': clickedSlow && clickedFast,
+		'并发：最终展示最后一次请求（今天）': raceHtml.includes('race-today'),
+		'并发：旧响应未覆盖新数据': !raceHtml.includes('race-yesterday'),
+		'并发：加载态已结束': !el3.querySelector('.fl-loading')
+	})) {
+		console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
+		if (!pass) ok = false;
+	}
+
+	// 非幂等操作回归：保存配置时连点按钮，只能提交一次
+	let saveCalls = 0;
+	const saveApi = Object.assign({}, api, {
+		setSettings: async () => {
+			saveCalls++;
+			await wait(150);
+			return { success: true };
+		}
+	});
+
+	const el4 = window.document.createElement('div');
+	window.document.body.appendChild(el4);
+	window.WrtbwstatApp.mount(el4, saveApi);
+	await wait(250);
+
+	const openSettings = Array.from(el4.querySelectorAll('button'))
+		.find((b) => b.textContent.trim() === 'Settings');
+	openSettings.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+	await wait(250);
+
+	const saveBtn = Array.from(el4.querySelectorAll('button'))
+		.find((b) => b.textContent.trim() === 'Save');
+	saveBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+	saveBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+	await wait(20);
+	const saveDisabled = saveBtn.disabled;
+	await wait(400);
+
+	for (const [ name, pass ] of Object.entries({
+		'非幂等：双击保存只提交一次': saveCalls === 1,
+		'非幂等：保存中按钮被禁用': saveDisabled === true,
+		'非幂等：保存成功提示': el4.innerHTML.includes('Saved')
+	})) {
+		console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
+		if (!pass) ok = false;
+	}
+
 	if (!ok) {
 		console.log('\n--- innerHTML 片段 ---\n' + el.innerHTML.slice(0, 800));
 		process.exit(1);

@@ -4,6 +4,7 @@ import BasePanel from '../ui/BasePanel.vue';
 import BaseButton from '../ui/BaseButton.vue';
 import BaseCallout from '../ui/BaseCallout.vue';
 import BaseEmpty from '../ui/BaseEmpty.vue';
+import BaseLoading from '../ui/BaseLoading.vue';
 import SectionTitle from '../ui/SectionTitle.vue';
 import AppIcon from '../ui/AppIcon.vue';
 import DailyBars from './DailyBars.vue';
@@ -58,7 +59,7 @@ const subtitle = computed(() => deviceSubtitle(props.device));
 
 		<BaseCallout v-if="error" tone="danger">{{ tm(error) }}</BaseCallout>
 
-		<BaseEmpty v-else-if="loading" :text="t('loading')" />
+		<BaseLoading v-else-if="loading" :label="t('loading')" />
 
 		<div v-else class="fl-detail-grid">
 			<section>

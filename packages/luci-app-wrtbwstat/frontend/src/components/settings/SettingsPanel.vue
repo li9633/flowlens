@@ -76,7 +76,7 @@ async function onReset() {
 		<p class="fl-hint">{{ t('refreshHint') }}</p>
 
 		<div class="fl-actions">
-			<BaseButton variant="primary" :disabled="saving" @click="onSave">
+			<BaseButton variant="primary" :disabled="saving || resetting" @click="onSave">
 				{{ t('save') }}
 			</BaseButton>
 		</div>
@@ -85,6 +85,7 @@ async function onReset() {
 			v-model="confirmReset"
 			:directory="collector?.directory || ''"
 			:resetting="resetting"
+			:saving="saving"
 			@reset="onReset"
 		/>
 	</BasePanel>

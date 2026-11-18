@@ -32,10 +32,16 @@ export function useDeviceDetail(api, device, range, t) {
 		return days.value.length === 1 ? days.value[0] : null;
 	});
 
+	// 与总览列表同理：连续切窗口 / 连续点设备时，只认最后一次请求的响应
+	let loadSeq = 0;
+
 	async function load() {
 		const mac = device.value?.mac;
+		const seq = ++loadSeq;
+
 		if (!mac) {
 			detail.value = null;
+			loading.value = false;
 			return;
 		}
 
@@ -43,13 +49,22 @@ export function useDeviceDetail(api, device, range, t) {
 		error.value = '';
 
 		try {
-			detail.value = await api.getDevice(mac, range.value);
+			const next = await api.getDevice(mac, range.value);
+
+			if (seq !== loadSeq)
+				return;
+
+			detail.value = next;
 		}
 		catch (e) {
+			if (seq !== loadSeq)
+				return;
+
 			error.value = e?.message || t('error');
 		}
 		finally {
-			loading.value = false;
+			if (seq === loadSeq)
+				loading.value = false;
 		}
 	}
 

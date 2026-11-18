@@ -3,6 +3,7 @@ import DeviceRow from './DeviceRow.vue';
 import BasePanel from '../ui/BasePanel.vue';
 import BaseEmpty from '../ui/BaseEmpty.vue';
 import BaseInput from '../ui/BaseInput.vue';
+import BaseLoading from '../ui/BaseLoading.vue';
 import AppIcon from '../ui/AppIcon.vue';
 import { useI18n } from '../../composables/useI18n.js';
 import { ASCENDING_SORTS } from '../../constants/index.js';
@@ -72,39 +73,48 @@ function sortBy(key) {
 			</div>
 		</template>
 
-		<BaseEmpty v-if="loading && !hasData" :text="t('loading')" />
+		<div class="fl-table-body" :aria-busy="loading">
+			<BaseLoading v-if="loading && !hasData" :label="t('loading')" />
 
-		<BaseEmpty v-else-if="!hasData" :text="t('empty')" />
+			<BaseEmpty v-else-if="!hasData" :text="t('empty')" />
 
-		<table v-else class="fl-table">
-			<thead>
-				<tr>
-					<th
-						v-for="col in columns"
-						:key="col.key"
-						:class="[ col.cls, col.right ? 'is-right' : '', col.sortable ? 'is-sortable' : '', sort === col.key ? 'is-sorted' : '' ]"
-						:aria-sort="col.sortable ? ariaSort(col.key) : undefined"
-						@click="col.sortable && sortBy(col.key)"
-					>
-						{{ t(col.text) }}<span v-if="sort === col.key" class="fl-sort-mark" aria-hidden="true">{{ sortMark(col.key) }}</span>
-					</th>
-				</tr>
-			</thead>
-			<tbody>
-				<DeviceRow
-					v-for="row in devices"
-					:key="row.mac"
-					:row="row"
-					:total-bytes="totalBytes"
-					:selected="row.mac === selected"
-					@select="emit('select', $event)"
-				/>
-			</tbody>
-		</table>
+			<table v-else class="fl-table">
+				<thead>
+					<tr>
+						<th
+							v-for="col in columns"
+							:key="col.key"
+							:class="[ col.cls, col.right ? 'is-right' : '', col.sortable ? 'is-sortable' : '', sort === col.key ? 'is-sorted' : '' ]"
+							:aria-sort="col.sortable ? ariaSort(col.key) : undefined"
+							@click="col.sortable && sortBy(col.key)"
+						>
+							{{ t(col.text) }}<span v-if="sort === col.key" class="fl-sort-mark" aria-hidden="true">{{ sortMark(col.key) }}</span>
+						</th>
+					</tr>
+				</thead>
+				<tbody>
+					<DeviceRow
+						v-for="row in devices"
+						:key="row.mac"
+						:row="row"
+						:total-bytes="totalBytes"
+						:selected="row.mac === selected"
+						@select="emit('select', $event)"
+					/>
+				</tbody>
+			</table>
+
+			<!-- 刷新时保留旧列表，用蒙层提示"数据在路上"，避免整块闪成占位符 -->
+			<BaseLoading :show="loading && hasData" overlay :label="t('loading')" />
+		</div>
 	</BasePanel>
 </template>
 
 <style scoped>
+.fl-table-body {
+	position: relative;
+}
+
 .fl-pill {
 	padding: 1px 7px;
 	border-radius: 999px;
