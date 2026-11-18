@@ -1,417 +1,159 @@
 # FlowLens
 
-FlowLens 是一个面向 OpenWrt / iStoreOS 的按设备流量统计插件项目，目标是让用户清晰看到"昨天、今天、近 7/30/90 天各设备用了多少流量"。名称取"流量透镜"之意——把内核 conntrack 中的流量数据聚合成可观察的视图。
+面向 OpenWrt 的按设备流量统计插件，适用于标准 OpenWrt 及基于它的衍生发行版（如 iStoreOS）。基于 nlbwmon 的 conntrack 账期，按自然日聚合每个设备的上下行流量，在 LuCI 中提供 Today / Yesterday / 7 / 30 / 90 天视图。
 
-## 当前状态
+## 功能
 
-- 设计：v2 定稿（Vue 3 + Vite 前端、ucode 后端、nlbwmon 采集）。打包双轨：apk 主推，ipk 维护至 24.10 EOL。
-- 后端：M1 已实现——六个 ubus 方法全部落地，逐日读取 nlbw 账期并聚合，带历史账期缓存与采集告警。已在 OpenWrt rootfs 容器内用 mock nlbw 跑通 144 条断言。
-- 前端：M2a 已完成——`app.js` / `app.css` 已构建入库，`npm run verify` 在 jsdom 中实测挂载通过（25 条断言），gzip 合计 41 KB。
-- 真机：已在 iStoreOS 24.10.8（rockchip/armv8，opkg）上部署跑通，页面可显示数据。
-- 前端功能：时间窗切换、汇总卡片、设备表（排序/搜索）、**设备详情（按日用量 + 协议分布）**、**设置页（采集参数 + 清库）** 均已实现。
-- 未完成：跨天/重启后历史保留验证（需真实积累）；SDK/buildroot 正式出包（M3）。apk 已可通过 `scripts/pack-apk.sh` 手工产出并在 25.12 真机安装验证。
+- 五个时间窗口的汇总卡与趋势线（总量、上行、下行）
+- 设备列表：按流量排序、关键词搜索、MAC 归并（同一设备的 IPv4/IPv6 合并）
+- 设备详情：按日用量柱状图与协议分布
+- 设置页：存储目录、保留天数、落盘间隔、压缩、自动刷新，以及清空数据库
+- 采集告警：tmpfs 目录、nlbw 缺失、`nf_conntrack_acct` 未开启、fullcone 冲突
 
-## 目录结构
+## 兼容性
+
+| 项 | 说明 |
+| --- | --- |
+| 固件 | 标准 OpenWrt 25.12+（apk，主推）与 24.10（ipk）；iStoreOS 等衍生发行版同样适用 |
+| 防火墙 | firewall4 / nftables，不写入任何规则 |
+| 后端 | ucode + `rpcd-mod-ucode` |
+| 采集 | nlbwmon（安装时自动作为依赖带入） |
+| 前端 | Vue 3 + Vite，预编译为 IIFE 产物，无构建依赖 |
+
+## 安装
+
+25.12+（apk）：
+
+```sh
+apk add --allow-untrusted ./wrtbwstat-0.1.0-r1.apk ./luci-app-wrtbwstat-0.1.0-r1.apk
+```
+
+24.10（ipk）：
+
+```sh
+opkg install ./wrtbwstat_0.1.0-1_all.ipk ./luci-app-wrtbwstat_0.1.0-1_all.ipk
+```
+
+安装后打开 LuCI → **网络 → FlowLens**。`wrtbwstat` 的采集参数由 `/etc/uci-defaults/80_wrtbwstat` 在开机时应用；如需立即生效（会重启 nlbwmon，未落盘计数清零）：
+
+```sh
+sh /etc/uci-defaults/80_wrtbwstat
+```
+
+卸载：`apk del luci-app-wrtbwstat wrtbwstat` 或 `opkg remove ...`。被修改过的 `/etc/config/wrtbwstat` 会保留。
+
+## 配置
+
+插件设置位于 `/etc/config/wrtbwstat`，nlbwmon 的采集参数仍在 `/etc/config/nlbwmon`。
+
+| 选项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `storage_dir` | `/mnt/usb` | 存储父目录，建议指向持久化磁盘；不能是 `/tmp`、`/var` |
+| `retention_days` | `95` | 账期保留天数，需覆盖 90 天窗口 |
+| `commit_interval` | `6h` | nlbwmon 落盘间隔 |
+| `compress` | `1` | 压缩历史账期 |
+| `refresh_interval` | `30` | 页面自动刷新秒数，可选 `0/10/30/60` |
+
+设备别名（可选）：
+
+```uci
+config alias
+	option mac 'aa:bb:cc:dd:ee:ff'
+	option name '客厅电视'
+```
+
+## 数据与存储
+
+数据库固定落在 `<storage_dir>/wrtbwstat/`，目录里只有插件写入的库文件：
 
 ```text
-flowlens/
-├── doc/                                  # 设计文档（v1 / v2），随仓库自包含
-├── tests/
-│   ├── run-backend-tests.sh              # 后端测试入口（OpenWrt rootfs 容器）
-│   └── backend/
-│       ├── verify.sh                     # 只读/写三阶段验证
-│       ├── driver.uc                     # 断言驱动（追加在插件源码之后执行）
-│       ├── mock-nlbw                     # nlbw 桩，产出固定流量
-│       ├── test-uci-defaults.sh          # 安装脚本落盘验证
-│       └── fixtures/                     # nlbwmon / wrtbwstat 的 UCI 配置
-├── packages/
-│   ├── wrtbwstat/                        # 数据面配置包：nlbwmon 日账期基线
-│   │   ├── Makefile                      # DEPENDS:=+nlbwmon +rpcd-mod-ucode
-│   │   └── root/
-│   │       ├── etc/config/wrtbwstat      # 插件层设置（存储目录、保留期、刷新间隔、别名）
-│   │       ├── etc/sysctl.d/99-wrtbwstat.conf
-│   │       └── etc/uci-defaults/80_wrtbwstat
-│   └── luci-app-wrtbwstat/               # 应用包：菜单 + ACL + 薄壳 view + 前端产物 + 后端
-│       ├── Makefile                      # include $(TOPDIR)/feeds/luci/luci.mk
-│       ├── frontend/                     # Vue 3 源码，不安装到设备
-│       │   ├── package.json
-│       │   ├── vite.config.js
-│       │   ├── index.html                # 开发预览宿主页
-│       │   ├── scripts/verify-bundle.js  # 产物挂载校验（25 条断言）
-│       │   └── src/
-│       │       ├── main.js               # 对外唯一入口 window.WrtbwstatApp
-│       │       ├── App.vue               # 只做区块编排与 UI 状态
-│       │       ├── assets/styles/        # tokens.css（设计令牌）+ base.css（复位）
-│       │       ├── components/
-│       │       │   ├── layout/           # AppHeader
-│       │       │   ├── ui/               # 设计系统原子件（按钮/面板/输入/图标…）
-│       │       │   ├── summary/          # 五窗口汇总卡 + 趋势线
-│       │       │   ├── devices/          # 设备表、行、头像、详情、逐日柱、协议
-│       │       │   └── settings/         # 设置面板、字段、危险区
-│       │       ├── composables/          # useTrafficData / useDeviceDetail /
-│       │       │                         #   useSettingsForm / useI18n
-│       │       ├── constants/index.js    # 与后端契约绑定的枚举与默认值
-│       │       ├── utils/                # format / i18n / device / color
-│       │       ├── mocks/                # dev 预览用的 fixtures + mock api
-│       │       └── dev/main.js           # 开发入口，注入 mock api
-│       ├── htdocs/luci-static/resources/
-│       │   ├── view/wrtbwstat/overview.js   # LuCI 薄壳 view
-│       │   └── wrtbwstat/                   # Vite 产物落点（app.js / app.css）
-│       └── root/usr/share/
-│           ├── luci/menu.d/luci-app-wrtbwstat.json
-│           └── rpcd/
-│               ├── acl.d/luci-app-wrtbwstat.json
-│               └── ucode/luci.wrtbwstat     # ubus 对象 luci.wrtbwstat
+/mnt/usb/wrtbwstat/
+├── 20261117.db.gz   # 历史账期（按日归档）
+└── 20261118.db      # 当天活跃库
+```
+
+- 「清空数据库」只删除该子目录内的库文件，不会影响父目录中的其他文件。
+- 更换存储目录时先停止 nlbwmon，再把历史库迁移到新目录（跨文件系统自动回退为 `mv`）。
+- 目录设在 tmpfs 上会在重启后丢失历史，设置页会直接拒绝。
+
+## fullcone NAT 冲突
+
+部分分支（如 ImmortalWrt）的 `firewall4` 硬依赖 `kmod-nft-fullcone`，启动时会用 `nft -c` 探测 fullcone 表达式，探测本身就会把 `nft_fullcone` 加载进内核。该模块加载后 conntrack 事件不再投递，nlbwmon 计数恒为 0（`conntrack -L` 正常、`conntrack -E` 无事件）。
+
+插件会在页面顶部给出告警，并支持一键处理：
+
+- 关闭 `firewall.fullcone` / `fullcone6`
+- 将 `/etc/modules.d/nft-fullcone` 与 `nft_fullcone.ko*` 改名禁用
+- 修改前把原文件备份到 `/etc/wrtbwstat/backup/<时间戳>/`，并生成 `restore.sh`；备份失败则不做任何修改
+- **不会自动重启**，需要手动重启路由器后生效
+
+代价是不再支持 fullcone NAT（影响 P2P、游戏联机的 NAT 类型）。若希望保留 fullcone，只能放弃本插件的统计功能。
+
+对应的命令行接口：
+
+```sh
+ubus call luci.wrtbwstat fix_fullcone '{"confirm":true}'
 ```
 
 ## 开发
 
-前端（Node 18+）：
+### 前端
 
 ```sh
 cd packages/luci-app-wrtbwstat/frontend
-npm ci               # 或首次 npm install；package-lock.json 已入库
-npm run dev          # 打开 http://localhost:5173，使用 mock 数据
-npm run build        # 产物直接写入 ../htdocs/luci-static/resources/wrtbwstat/
-npm run verify       # 在 jsdom 中挂载产物并断言渲染，同时检查体积与 new Function
+npm ci
+npm run dev      # http://localhost:5173，使用 mock 数据
+npm run build    # 产物写入 ../htdocs/luci-static/resources/wrtbwstat/
+npm run verify   # jsdom 挂载断言 + 体积检查
 ```
 
-构建机（OpenWrt 25.12 SDK）**不执行 npm**，只消费已提交的 `app.js` / `app.css`。
+构建机（OpenWrt SDK）不执行 npm，只使用仓库中已提交的 `app.js` / `app.css`。改动前端后需重新 `build` 并提交产物。
 
-改动前端后必须 `npm run build && npm run verify` 再提交，防止产物与源码漂移（验收条目 8/9）。
-
-### 前端目录约定
-
-按 Vue 3 官方推荐的工程结构组织，一条规则对应一个目录，不按"类型混装"：
-
-| 目录 | 放什么 | 判断标准 |
-| --- | --- | --- |
-| `assets/styles/` | `tokens.css` 设计令牌、`base.css` 全局复位 | 只有这两类才允许写全局样式 |
-| `components/ui/` | 与业务无关的原子件（按钮、面板、输入、图标、分段控件…） | 换个项目也能直接用 |
-| `components/<domain>/` | 按业务域分组：`layout` / `summary` / `devices` / `settings` | 只服务本页面，但属于某一业务概念 |
-| `composables/` | 有状态的逻辑：取数、表单、i18n（`useXxx` 命名） | 组件里出现 `async` + 多个 `ref` 就该抽出来 |
-| `utils/` | 纯函数（格式化、设备显示规则、配色散列） | 输入输出确定、无副作用 |
-| `constants/` | 与后端契约绑定的枚举与默认值 | 改这里要同步改 ucode 与 driver.uc |
-| `mocks/` | dev 预览用的 fixtures 与 mock api | 不进产物 |
-
-视觉样式写在各自组件的 `<style scoped>` 里，删组件不会留下孤儿样式；跨组件穿透只用于「表控制行」这类明确归属（`DeviceTable` 用 `:deep()` 管 `DeviceRow` 的单元格）。
-
-### 体积实测（2026-11-18，vite 7.3.8 / vue 3.5.45）
-
-| 产物 | 原始 | gzip |
-| --- | --- | --- |
-| `app.js`（Vue runtime + 应用组件） | 103.2 KB | 37.7 KB |
-| `app.css`（令牌 + 各组件 scoped 样式） | 20.9 KB | 4.4 KB |
-| 合计 | 124.1 KB | **41 KB**（预算 120 KB） |
-
-### 构建注意
-
-- **lib 模式不会自动替换 `process.env.NODE_ENV`**：Vue 的 esm-bundler 构建通篇用它做 dev 校验开关，若不在 `vite.config.js` 的 `define` 里显式替换，产物会残留 `process.env`，浏览器加载即抛 `process is not defined` 导致整页白屏。已在配置中固定，`npm run verify` 也会拦截该情况。
-- 产物必须是 IIFE 而非 ES Module：LuCI 的自定义模块加载器与 ESM 不兼容，view 只能用同源 `<script>` 注入。
-- 模板全部预编译（`vue.runtime.esm-bundler.js`），产物中不含 `new Function`，未来 CSP 落地无需放宽策略。
-
-## 打包：apk 与 ipk 双轨
-
-**策略**：apk 为主推，ipk 维护到 OpenWrt 官方停止支持 24.10 为止。两条线共用同一份源码、同一份 Makefile——出什么格式由 SDK 的 `CONFIG_USE_APK` 决定，代码里没有任何版本分支。
-
-```sh
-# 25.12+ / main SDK（CONFIG_USE_APK=y）→ 产出 .apk
-sh scripts/build-in-sdk.sh ~/sdk/openwrt-sdk-25.12
-
-# 24.10 / iStoreOS 对应分支 SDK → 产出 .ipk
-sh scripts/build-in-sdk.sh ~/sdk/openwrt-sdk-24.10
-```
-
-脚本会校验 SDK、把 `packages/` 复制到 `package/flowlens/`、编译两个包并打印产物路径。前提是 SDK 里已 `./scripts/feeds update luci && ./scripts/feeds install -a -p luci`，否则 `luci.mk` 不存在（也可以用 `LUCI_MK=...` 指定其他位置）。
-
-### 实测记录（2026-11-18）
-
-| 包 | ipk（24.10.5 SDK） | apk（25.12.6 SDK） |
-| --- | --- | --- |
-| `wrtbwstat` | ✅ `wrtbwstat_0.1.0-r1_all.ipk`（3.1 KB） | ✅ `wrtbwstat-0.1.0-r1.apk`（3.0 KB） |
-| `luci-app-wrtbwstat` | ⚠️ SDK 未产出（环境限制，见下） | ⚠️ SDK 未产出（同一限制）→ ✅ 已用 `pack-apk.sh` 手工产出 |
-
-`wrtbwstat` 两种格式都已核验，元数据一致、仅格式不同：
-
-```text
-ipk control : Package: wrtbwstat / Version: 0.1.0-r1 / Architecture: all
-              Depends: libc, nlbwmon, rpcd-mod-ucode / License: Apache-2.0
-              conffiles: /etc/config/wrtbwstat
-apk adbdump : name: wrtbwstat / version: 0.1.0-r1 / arch: noarch
-              depends: libc, nlbwmon, rpcd-mod-ucode / provides: wrtbwstat-any
-              conffiles 记录在 lib/apk/packages/wrtbwstat.conffiles
-data（两者） : /etc/config/wrtbwstat (0600)
-              /etc/sysctl.d/99-wrtbwstat.conf (0644)
-              /etc/uci-defaults/80_wrtbwstat (0755)
-```
-
-`luci-app-wrtbwstat` 在裸 SDK 里编不出来，两条线原因相同：`luci.mk` 强制 host 编译 `luci-base`，而 `luci-base` 依赖 `liblucihttp-ucode` → `lucihttp` 的 ucode 绑定需要 `ucode/module.h`。OpenWrt SDK **不包含核心包源码**（`package/` 下只有 kernel 与 toolchain，`staging_dir/target-*/usr/include` 为空），且该绑定由 `luci-base` 强制选中，无法通过改 `.config` 绕开。这不是本仓库的问题——任何 LuCI 应用都会撞上。出应用包需要：
-
-- 完整 buildroot（`git clone openwrt` + feeds，`make package/flowlens/luci-app-wrtbwstat/compile`），或
-- 一个 `staging_dir` 里带 `libucode` 头文件的 SDK。
-
-`wrtbwstat` 能出包正因为它只 `include $(INCLUDE_DIR)/package.mk`，不碰 `luci.mk`。应用包的 apk 已改用 `apk mkpkg` 手工通道补齐（见下节），不依赖 SDK。
-
-**完整 buildroot 也试过，被网络挡住**：克隆源码、配好 feeds 后，工具链阶段需要从 `sources.openwrt.org` 下载 gcc/binutils/musl 等上百 MB 源码，该站此网络只有 3–15 KB/s（`downloads.openwrt.org` 同样慢），实际跑不完。脚本保留在 `scripts/build-in-sdk.sh`，换到网络正常的环境可直接用。
-
-### 手工打包 ipk（备用通道，已实测）
-
-`scripts/pack-ipk.sh` 按 OpenWrt 的 ipk 规范（`debian-binary` + `control.tar.gz` + `data.tar.gz`）打包，元数据与 `luci.mk` 对齐。已在 iStoreOS 24.10.8 上实测：`opkg install` → 对象自动注册 → 数据正常；`opkg remove` → 文件清除干净；重装再次生效。
-
-```sh
-sh scripts/pack-ipk.sh          # 产物在 dist/
-```
-
-**一个只有真装才会发现的坑**：包里的 `postinst` 必须与 `luci.mk` 生成的保持一致——除了清 LuCI 索引缓存，还要 `/etc/init.d/rpcd reload`。少了这一步，`opkg install` 明明成功，但 `ubus list` 里没有 `luci.wrtbwstat`，页面一直空白（rpcd 只在启动时加载 ucode 脚本）。`luci.mk` 第 236 行本来就做了这件事，手工打包时容易漏。
-
-### 手工打包 apk（备用通道，已实测）
-
-`scripts/pack-apk.sh` 用 apk-tools 3 自带的 `apk mkpkg` 直接生成 v3（ADB 格式）包，安装 `/lib/apk/packages/<包名>.list|.conffiles|.conffiles_static` 以对齐官方 apk 的 conffiles 语义。
-
-```sh
-# 需要带 mkpkg 的 apk-tools 3（Alpine 自带；Ubuntu/Debian 没有）
-sh scripts/pack-apk.sh          # 产物在 dist/
-```
-
-**不要手拼 apk v2 格式**：按旧规范拼出的 `control.tar.gz + data.tar.gz` 会被 apk 3 直接拒绝（`ADB header error` / `file format is invalid or inconsistent`），25.12 的包管理器只吃 v3。
-
-真机实测（2026-11-18，ImmortalWrt 25.12.2 / x86_64 / apk-tools 3.0.5）：
-
-| 项 | 结果 |
-| --- | --- |
-| `apk add --allow-untrusted` | 两包同时安装成功，依赖解析正常（libc / nlbwmon / rpcd-mod-ucode / luci-base） |
-| 安装后 `ubus list` | 直接出现 `luci.wrtbwstat`（`post-install` reload rpcd 生效） |
-| 六个 ubus 方法 | `get_settings` / `get_summary` / `get_devices` / `get_device` 均返回真实数据；`set_settings` 的 `errDirTmpfs`、`errRefresh`、`reset_database` 的 `errConfirm` 拒绝路径正确；合法值（`retention_days=95`）落盘生效 |
-| 静态资源 | `app.js` / `app.css` / `overview.js` 均 200 |
-| LuCI 页面 | 浏览器登录后正常渲染：五窗口汇总卡、设备区、fullcone 告警条，无 JS 报错 |
-| `apk del` | 文件清干净；`/etc/config/wrtbwstat` 作为**被改过的 conffile 保留**（apk 语义，与 opkg 一致） |
-
-据此补了一处包内容：`luci-app-wrtbwstat` 增加 `post-deinstall`（清索引缓存 + `rpcd reload`）。少了它，`apk del` 后 `ubus list` 里 `luci.wrtbwstat` 会一直残留到下次重启或手动 reload。
-
-同时修了一个只在真机主题下才暴露的样式问题：Argon 用裸元素选择器给 `button` 写了 `height:2.5rem`，而汇总卡是「标签 + 总量 + 上下行 + 趋势」四行内容的 `<button>`，被定成 40px 后叠加自身的 `overflow:hidden`，整张卡被裁成一条只看得见总量。`base.css` 里用 `.flowlens button { height: auto }` 把高度交回内容（`BaseButton`、分段控件同样受益）。本地 dev / jsdom 都复现不了这类问题——它们没有主题 CSS。
-
-还有一个数据面的真机问题：`reset_database` 原来只 glob `nlbwmon.db*`，而 25.12 的 nlbwmon 按账期命名库文件（`20261101.db.gz`、`20261118.db.gz`，`-Z` 时压缩），于是一个文件都删不到，却返回 `success:true, removed:0`，前端提示「已清空」而页面仍是 79.9 GB。现在改为同时匹配 `*.db` / `*.db.gz` / `nlbwmon.db*`。测试夹具原先也用 `nlbwmon.db` 这种旧命名，所以单测一直是绿的——已改成真实命名（3 个文件，断言 `removed=3`），这条只有真机才暴露。
-
-> 另：安装 `wrtbwstat` 只是铺好 `/etc/uci-defaults/80_wrtbwstat`，nlbwmon 的日账期/持久化目录要等**开机**由 uci-defaults 执行才生效；要立即生效就手动 `sh /etc/uci-defaults/80_wrtbwstat`（会重启 nlbwmon 并按 `storage_dir` 新建目录，未提交的计数会清零）。
-
-存储目录改成了「父目录 + 插件独占子目录」：`storage_dir` 只表示父目录（默认 `/mnt/usb`），nlbwmon 的库固定落在 `<storage_dir>/wrtbwstat/`。`reset_database` 会校验目录 basename 必须是 `wrtbwstat`，否则返回 `errDirUnavailable`，因此即使 `storage_dir` 被误设为盘根也不会清掉用户文件（真机上在 `/mnt/usb/keepme.txt` 存在时验证过拒绝路径）。旧版的 `storage_dir` 语义（默认 `.../nlbwmon`）会在 uci-defaults 里自动收敛为父目录并迁移旧库；`set_settings` 换目录时先停采集进程再迁移（`rename`，跨文件系统回退到 `mv`）。
-
-真机复测（ImmortalWrt 25.12.2）：`get_settings` 返回 `storage_dir=/mnt/usb`、`data_dir=/mnt/usb/wrtbwstat`；旧目录库文件自动迁移；嵌套父目录（`/mnt/usb/flowtest`）与跨文件系统（`/mnt/sda1`）切换均成功搬运；`reset_database` 只清子目录，返回 `removed=4, freed_bytes=82`，父目录文件无损。
-
-**fullcone NAT 与 conntrack 事件（真机踩坑）**：`firewall4` 启动时无论 `fullcone` 是否为 0，都会用 `nft` 试建一条 fullcone 规则探测支持性（`fw4.uc` 的 `nft_try_fullcone()`），内核因此加载 `nft_fullcone` 模块。该模块一旦加载，ctnetlink 的 NEW/DESTROY 事件就送不到用户态：`conntrack -L` 能看到流量，`conntrack -E` 一条事件都没有，nlbwmon 计数恒为 0。只 `uci set firewall.@defaults[0].fullcone=0` 或 `rmmod` 都不够——模块会在每次 firewall 启动时被重新加载，且卸载后事件也不会恢复，必须重启。彻底解决：把 `/lib/modules/<ver>/nft_fullcone.ko` 改名/移出模块目录后再重启（`fw4` 的探测失败会走已有的降级路径，日志出现 `nft_try_fullcone failed, disable fullcone globally`，属预期），代价是不再支持 fullcone NAT。处理后当天统计从 0 恢复为正常累计，`collect_warnings()` 也不再报 `warnFullcone`。
-
-这个处置已做进插件：告警条不再只有一句「可能无法送达」，而是带「一键修复」按钮（`ubus call luci.wrtbwstat fix_fullcone '{"confirm":true}'`）。后端会关闭 `firewall.fullcone/fullcone6`、把 `/etc/modules.d/nft-fullcone` 与所有 `nft_fullcone.ko*` 改名加 `.disabled`，只落盘不重启——插件不会自动重启路由器，页面在修复后改成「请手动重启」的提示，重启由用户自己完成。改动前会把要碰的文件原样备份到 `/etc/wrtbwstat/backup/<时间戳>/`，并生成 `restore.sh`（把三处改动原样还原，执行后同样需手动重启）；备份不完整则整体放弃、不做任何修改，接口返回 `errBackupFailed`。修复完成后接口返回 `backup_dir`，页面在「待重启」状态下继续展示备份路径，用户重启前都能看到怎么回退。模块若被编译进内核（找不到 `.ko`）则返回 `errFullconeBuiltin`，提示更换固件。因为会改变用户的 NAT 类型，动作必须由用户点击触发，`confirm=true` 才执行。
-
-> 附：25.12.6 SDK 解压后约 2.5 GB；构建前若缺 `.config`，直接 `make` 会拉起交互式 menuconfig 并因 `$TERM=unknown` 失败，先 `make defconfig` 即可。
-
-安装：
-
-```sh
-apk add --allow-untrusted ./wrtbwstat-0.1.0-r1.apk ./luci-app-wrtbwstat-0.1.0-r1.apk   # 25.12+
-opkg install ./wrtbwstat_0.1.0-1_all.ipk ./luci-app-wrtbwstat_0.1.0-1_all.ipk          # 24.10
-```
-
-### 两条线的差异与兼容性
-
-| 项 | 25.12+（apk，主推） | 24.10（ipk，维护中） |
-| --- | --- | --- |
-| 包管理器 | apk | opkg |
-| 防火墙 | firewall4 / nftables | firewall4 / nftables（22.03 起） |
-| 后端运行时 | ucode + `rpcd-mod-ucode` | 同左（24.10 已具备） |
-| LuCI 客户端 | 浏览器 JS（`require rpc` / `poll` / `view`） | 同左，薄壳 view 无需另写 |
-| `/etc/sysctl.d/*.conf` | 支持 | 支持（18.06 起） |
-| 预编译产物 | app.js / app.css | 同一份，无差异 |
-| 本项目的差异处理 | 无 | 仅打包格式不同 |
-
-因为两个包都是 `PKGARCH:=all` 的纯配置 / 纯脚本包，产物内容一致，区别只在包格式与依赖解析方式。`wrtbwstat` 依赖 `+nlbwmon +rpcd-mod-ucode`，`luci-app-wrtbwstat` 依赖 `+luci-base +wrtbwstat`，两条线同名可解析。
-
-24.10 EOL 后：删除本节 ipk 部分、`scripts/build-in-sdk.sh` 的格式探测与 README 的技术基线，代码无需改动（本就无版本分支）。
-
-
-
-## 接口契约
-
-ubus 对象 `luci.wrtbwstat`，方法与入参见设计文档 5.1：
-
-| 方法 | 入参 | 当前状态 |
-| --- | --- | --- |
-| `get_summary` | `range` | M1 已实现：聚合 90 个自然日后按窗口求和，附 `series`、`warnings` |
-| `get_devices` | `range`, `sort`, `keyword` | M1 已实现：按 MAC 归并、别名/DHCP 名回退、排序与关键词过滤 |
-| `get_device` | `mac`, `range` | M1 已实现；前端点击设备行即展开日序列 + 协议分布 |
-| `get_settings` | — | M1 已实现：插件设置 + nlbwmon 采集状态 + 风险告警 |
-| `set_settings` | 配置对象 | M1 已实现；设置页可改目录/保留期/落盘间隔/压缩/刷新间隔，目录未变则不重启采集 |
-| `reset_database` | `confirm` | M1 已实现；设置页危险区需勾选确认后才可点，强制 `confirm=true` |
-
-`range` 取值固定为 `today | yesterday | last7 | last30 | last90`；`sort` 取 `total | rx | tx | hostname | mac`。
-
-### M1 实现要点
-
-- **只读 `nlbw -c json`**，不解析 nlbwmon 数据库文件。`nlbw` 的 JSON 是 `{"columns":[...],"data":[[...]]}`，列集合随 `-g` 变化，所以按**列名**映射而非固定下标。
-- **账期归属**：今天读守护进程活跃库（不带 `-t`），历史日期读归档库（`-t YYYY-MM-DD`）。历史账期归档后不再变化，因此落 `/tmp/wrtbwstat-cache/` 缓存；今天的账期不缓存。`reset_database` 与更换存储目录都会清缓存。
-- **自然日枚举**走 ucode 原生 `localtime()` / `timelocal()`：以本地时间 12:00 为锚点、`mday` 减去偏移，越界由 `timelocal` 归一化进位。取中午而非 00:00，避免少数时区午夜切换夏令时的日期歧义。
-- **成本**：`nlbw` 一次只能读一个账期，`get_summary` 要覆盖近 90 天，首调用会有 90 次进程派生（约 1-3 秒，视设备而定），之后命中缓存。`get_devices(range)` 只读该窗口所需的日数。
-- **已知取舍**：
-  - `first_seen` / `last_seen` 无法从账期摘要还原，返回 `null`，改用 `days_active`（窗口内有流量的天数）表达。
-  - **设备标识**：`hostname` 取不到时返回空串（而不是回退成 MAC），并另给 `ip` 字段（DHCP 租约优先、其次 `/proc/net/arp`）。前端据此决定排版——有名称时「名称 + MAC 副标题」，无名称时「MAC 标题 + IP 副标题」，避免同一串 MAC 上下重复两遍。关键词搜索同时匹配名称、MAC 与 IP。
-  - MAC 为 `00:00:00:00:00:00` 的流量（nlbwmon 未解析到源 MAC，多见于 IPv6）单独成一行，标记 `unknown_source: true`。
-  - 协议分布优先按 `layer7` 分组；若该 nlbw 版本不支持按复合字段分组，自动回退 `-g mac,proto`，标签变成 `proto 6` 之类。
-
-## 多语言（只维护简体中文与英文）
-
-只做两种语言：**英文作为源码语言**（`_()` 的 msgid），**简体中文**放 `po/zh_Hans/wrtbwstat.po`。
-
-三层机制，缺一层就会出现中英混排：
-
-1. **后端不写自然语言**。告警与校验错误只回 `code` + 参数，例如
-   `{ code: 'warnTmpfs', dir: '/var/lib/nlbwmon' }`、`'errRetention'`，由前端翻译。
-   否则中文文案会直接漏到英文界面里（这正是最初"一半中文一半英文"的根因之一）。
-2. **po → lmo**。打包时用 `po2lmo` 编译，安装到 `/usr/lib/lua/luci/i18n/`。
-   由于固件语言目录命名不一致（iStoreOS 用 `zh-cn`、上游用 `zh_Hans`），**两个名字各装一份**。
-3. **视图内置词典兜底**。`overview.js` 里带一份中文词典，`T()` 先问 LuCI 的 `_()`，
-   翻译未生效时按 `<html lang>` 决定是否用内置中文。这样即使某台机器没有加载 `.lmo`，
-   页面也只会是"全中文"或"全英文"，不会混排。
-
-新增文案时三处都要改：`po/zh_Hans/wrtbwstat.po`、`overview.js` 的 i18n 表（英文源串）、
-`overview.js` 的内置 `ZH` 词典；若新增后端 code，还要在 i18n 表里加同名 key。
-
-`npm run verify` 会分别用英文与中文各渲染一次，并断言中文页里不出现 `Traffic usage`、`Download` 等英文残留。
-
-### 自动化测试（已在 OpenWrt 容器内跑通）
+### 后端测试
 
 ```sh
 sh tests/run-backend-tests.sh
-# 国内拉不动 Docker Hub 时：
+# Docker Hub 不可用时：
 IMAGE=docker.1panel.live/openwrt/rootfs:x86-64 sh tests/run-backend-tests.sh
 ```
 
-把仓库根挂进 `openwrt/rootfs:x86-64`，用 mock `nlbw` 产出**固定流量**（每日 rx=1510 / tx=151），因此每个数字都能预先算出。三组用例共 144 条断言：
+在 OpenWrt rootfs 容器内用 mock `nlbw` 跑固定流量数据，覆盖聚合、排序、缓存、设置校验、清库与 fullcone 修复的备份/恢复。
 
-| 用例 | 覆盖 |
-| --- | --- |
-| `tests/backend/verify.sh` | 五窗口总量与 series 长度、MAC 归并、别名/DHCP/MAC 三级回退、排序、关键词、协议分布、`set_settings` 五种拒绝路径与生效、`reset_database`、缓存命中的调用次数（冷 104 → 热 9） |
-| 同上 `FL_NLBW_BREAK_LAYER7=1` | `-g mac,layer7` 失败时回退 `-g mac,proto` 的分支 |
-| `tests/backend/test-uci-defaults.sh` | 安装脚本把 tmpfs 目录改为持久化目录、写入日账期/保留代/commit/compress、补 `local_network` |
-
-> 为什么用 OpenWrt rootfs 而不是 Ubuntu：验证需要真实 `ucode` 解释器及自带 `fs`/`uci` 模块。Ubuntu 源里没有 `ucode` 包。
-
-### M1 实测发现并修复的 4 个问题
-
-这几个都是"看起来对、跑起来错"，且大多会静默返回错误数据而非报错：
-
-1. **`int / int` 是整除**：`7700 / 11627` 得到 `0`，导致 `share` 全为 0。必须 `* 1.0` 转 double。
-2. **`sort()` 比较器必须返回数值**：返回布尔时比较被视为"相等"，数组**完全不排序**（实测 `[3,1,2]` 原样返回）。排序用 `b - a`，字符串用比较函数返回 -1/0/1。
-3. **`split(str)` 省略分隔符返回 `null`**，不是按空白拆分——DHCP 租约全部解析失败。需显式给分隔符并过滤空字段。
-4. **按"值当下标"取数组元素**（`REFRESH_CHOICES[60]`、`SORTS[sort]`）：数组只有 4 个元素，索引 60 恒为 null，导致刷新间隔校验永远失败、`sort=rx/hostname/mac` 全部静默回退成 `total`。改用显式成员判断。
-
-### 开发版部署（不打包，直接铺文件）
-
-正式包出来之前，联调用 `scripts/dev-deploy/`：把 `packages/` 下的文件按设备路径铺好再重启 rpcd。
+### 打包
 
 ```sh
-# 1. 组装（任意 Linux 机器）
-mkdir -p /tmp/fl/stage && cp -r packages/luci-app-wrtbwstat/root/usr /tmp/fl/stage/
-cp -r packages/luci-app-wrtbwstat/htdocs/luci-static /tmp/fl/stage/www/
-cp -r packages/wrtbwstat/root/etc /tmp/fl/stage/
-cp scripts/dev-deploy/*.sh /tmp/fl/
-tar czf flowlens-dev.tar.gz -C /tmp/fl install-dev.sh uninstall-dev.sh stage
-
-# 2. 路由器上
-cd /tmp && wget -O fl.tgz http://<你的文件服务器>/flowlens-dev.tar.gz
-mkdir fl && tar xzf fl.tgz -C fl && cd fl && sh install-dev.sh
+sh scripts/build-in-sdk.sh ~/sdk/openwrt-sdk-25.12   # SDK 出包（.apk）
+sh scripts/build-in-sdk.sh ~/sdk/openwrt-sdk-24.10   # SDK 出包（.ipk）
+sh scripts/pack-ipk.sh                               # 手工 ipk
+sh scripts/pack-apk.sh                               # 手工 apk（需 apk-tools 3）
 ```
 
-映射关系：`root/` → `/`，`htdocs/luci-static/` → `/www/luci-static/`。
+两个包都是 `PKGARCH:=all` 的脚本/配置包，apk 与 ipk 内容一致，仅封装格式不同。SDK 出应用包需要完整 buildroot 或带 `libucode` 头文件的 staging_dir，详见脚本注释。
 
-**注意**：OpenWrt 基础系统**没有 `install` 命令**（busybox 未编译该 applet），脚本里必须用 `mkdir -p` + `cp` + `chmod`，不要用 `install -m`。
+## 目录结构
 
-### 真机实测结果（iStoreOS 24.10.8 / rockchip armv8）
+```text
+.
+├── packages/
+│   ├── wrtbwstat/               # 数据面配置包：nlbwmon 日账期基线、sysctl、uci-defaults
+│   └── luci-app-wrtbwstat/      # 应用包：菜单 / ACL / view / 预编译前端 / ucode 后端
+│       ├── frontend/            # Vue 3 源码（不装入设备）
+│       ├── htdocs/              # LuCI 静态资源（app.js / app.css / overview.js）
+│       └── root/                # rpcd ucode 后端、acl.d、menu.d
+├── tests/backend/              # 容器内后端验证脚本与断言
+├── scripts/                    # 打包与部署脚本
+└── doc/                        # 设计文档
+```
 
-已通过 SSH 在目标路由器上部署 `scripts/dev-deploy/` 并验证：
+## 排错
 
-| 项 | 结果 |
+| 现象 | 处理 |
 | --- | --- |
-| 包管理器 / ucode | opkg / ucode 2025.07.18，`rpcd-mod-ucode` 与 `ucode-mod-{fs,uci,ubus}` 齐全 |
-| `nlbw` 位置 | **`/usr/sbin/nlbw`**（不是 `/usr/bin`）——已改为启动时按候选列表探测，写死路径会误报"nlbw 缺失" |
-| `-g mac` 列名 | `["mac","conns","rx_bytes","rx_pkts","tx_bytes","tx_pkts"]`，与解析器的按列名映射一致 |
-| `-g mac,layer7` | 可分组，列含 `proto/port/layer7`；`layer7` 部分为 `null`（协议库只映射少量端口），部分为 `HTTPS` 等 |
-| 默认数据库目录 | `/var/lib/nlbwmon`，而 `/var` 是 tmpfs 的软链 → 重启丢历史；已改为 `/dockers-data/nlbwmon`（fstab 挂载，40 G 可用） |
-| `nlbw -c commit` | 生成 `20261118.db.gz`（`database_compress=1` 生效），`-t 2026-11-18` 可读 |
-| 历史归档校验 | 改名的副本会被拒（`No data available`），即归档按内部日期校验；后端把该错误当日 0 处理，不报错 |
-| 实测耗时 | `get_summary` 冷 0.58–0.66 s / 热 0.62 s；`get_devices last7` 0.06 s |
-| 静态资源 | `app.js` 73515 B、`app.css` 2774 B、`overview.js` 3206 B 均返回 200 |
-| 设备名 | DHCP 租约解析生效（`ubuntu-server`），`share` 计算正确 |
+| 页面空白 / `ubus list` 无 `luci.wrtbwstat` | `/etc/init.d/rpcd reload`，清理 `/tmp/luci-indexcache.*` |
+| 统计一直为 0 | 检查 fullcone 告警；确认 `nlbwmon` 在运行 |
+| 重启后历史丢失 | `storage_dir` 指向了 tmpfs，改为持久化磁盘 |
+| 提示 nlbw 缺失 | 安装 `nlbwmon`（`apk add nlbwmon` / `opkg install nlbwmon`） |
 
-据此修了三处代码：`nlbw` 路径改为运行时探测、协议名在 `layer7` 为 null 时退回 `proto/port`、过滤零字节协议条目。
+## 许可
 
-> 仍需人工确认：浏览器打开 LuCI → 网络 → FlowLens，看页面是否正常渲染（后端与静态资源已通，剩下是 Vue 挂载与轮询）。
-
-### 真机冒烟测试（备查）
-
-**前置条件：路由器必须已安装 `nlbwmon`**（`nlbw` 命令来自该包）。装包时 `wrtbwstat` 的 `DEPENDS:=+nlbwmon` 会自动带入，但手工验证阶段需先自己装：
-
-```sh
-opkg update && opkg install nlbwmon      # opkg 系统
-apk update  && apk add nlbwmon           # apk 系统（25.12+）
-```
-
-未安装时后端不会报错，而是返回空数据并在 `get_summary` / `get_settings` 的 `warnings` 里给出「nlbw 命令缺失」，页面顶部会显示告警条。
-
-容器用的是 mock `nlbw`，**真实 `nlbw -c json` 的列名仍需在设备上确认一遍**。装包后按顺序执行：
-
-```sh
-# 1. 对象是否注册（rpcd 需要重载才能看到新脚本）
-/etc/init.d/rpcd restart && ubus list luci.wrtbwstat
-
-# 2. 设置与采集状态（最快，先确认 nlbw 路径、目录、conntrack acct、告警文案）
-ubus call luci.wrtbwstat get_settings
-
-# 3. 原始数据是否可读——这一步决定后续解析假设是否成立
-nlbw -c json -n -g mac -o -rx_bytes | head -c 300
-nlbw -c json -n -g mac,layer7 -o -rx_bytes | head -c 300    # 验证 layer7 能否分组
-nlbw -t 2026-11-17 -c json -n -g mac -o -rx_bytes | head -c 300
-
-# 4. 汇总（首次会逐日调用 nlbw，较慢）
-time ubus call luci.wrtbwstat get_summary '{"range":"today"}'
-
-# 5. 设备列表与单设备详情
-ubus call luci.wrtbwstat get_devices '{"range":"last7","sort":"total","keyword":""}'
-ubus call luci.wrtbwstat get_device '{"mac":"aa:bb:cc:dd:ee:ff","range":"last7"}'
-```
-
-第 3 步的输出直接决定解析是否要调整：若 `columns` 里没有 `rx_bytes` / `mac` 这两个名字，把实际输出贴回来，改 `nlbw_query()` 的列名映射即可。
-
-## 与设计文档的差异（需确认）
-
-1. **仓库布局**：文档 5.3 画的 `wrtbwstat/`、`luci-app-wrtbwstat/` 位于顶层；本仓库沿用既有 README 约定的 `packages/` 子目录，包名与内部相对路径不变。
-2. **ucode 后端归属**：文档 5.3 把 `rpcd/ucode/luci.wrtbwstat` 放在 `luci-app-wrtbwstat` 包内，此处照做；若希望"只装后端不装界面"，可平移到 `wrtbwstat` 包。
-3. **命名统一**：文档 5.2.2 示例中前端入口写作 `window.UsagestatApp`、挂载点 `usagestat-app`，与包名 `wrtbwstat` 不一致。骨架统一为 `window.WrtbwstatApp` / `#wrtbwstat-app`。
-4. **新增配置项**：文档只提存储目录与保留期，骨架额外固化了 `commit_interval`、`compress`、`refresh_interval`（`/etc/config/wrtbwstat`），对应 4.3 节与 FR-07。
-5. **打包策略**：文档 5.4 写的是"不产出 ipk，不维护 24.10 分支"。产品决定调整为主推 apk、同时保留 ipk 至 24.10 EOL，因为目标设备（iStoreOS 分支）当前仍是 opkg。已确认两条线不需要代码分叉：ucode + `rpcd-mod-ucode`、firewall4、`/etc/sysctl.d`、LuCI 浏览器端 JS 在 24.10 均已具备。
-
-## 待办
-
-- [ ] M0：在目标设备验证 `conntrack -E` 事件、nlbwmon 落库与 fullcone 冲突，回填 90 天体积实测。
-- [x] M1：`enumerate_days` / `read_day`（`nlbw -c json -n -t`）/ `aggregate` / `resolve_hostname` / `day_total` / 缓存。
-- [x] M1：`set_settings` 校验（拒绝 tmpfs 目录、保留期、刷新间隔白名单）与 `reset_database`。
-- [x] M1-verify：OpenWrt rootfs 容器内 144 条断言全通过（含 layer7 回退与 uci-defaults），修掉 4 个 ucode 语义问题。
-- [x] M1-verify-device：iStoreOS 24.10.8 真机确认列名、`-g mac,layer7` 可分组、`nlbw` 在 `/usr/sbin`。
-- [x] M2b-verify：浏览器确认 LuCI 页面渲染（2026-11-18，ImmortalWrt 25.12.2）；30s 轮询未单独观测。
-- [x] M2a：依赖安装与构建跑通，`app.js` / `app.css` / `package-lock.json` 入库；`npm run verify` 在 jsdom 中实测挂载通过。
-- [x] M2b：25.12 LuCI 中联调薄壳 view——已于 ImmortalWrt 25.12.2 真机确认会话、ACL 与页面渲染；poll 生命周期未单独观测。
-- [x] M3-ipk：24.10.5 SDK 产出 `wrtbwstat` 的 ipk 并核验 control / conffiles / 文件权限。
-- [x] M3-apk：25.12.6 SDK 产出 `wrtbwstat-0.1.0-r1.apk` 并核验元数据与权限。
-- [x] M3-app-ipk：`luci-app-wrtbwstat` 的 ipk 已产出并在真机 install/remove 验证（`scripts/pack-ipk.sh`）；SDK/buildroot 出包受 `sources.openwrt.org` 限速所限未完成。
-- [x] M3-apk-app：`luci-app-wrtbwstat` 的 apk 已由 `scripts/pack-apk.sh`（apk-tools 3 `mkpkg`，v3/ADB 格式）产出，并在 ImmortalWrt 25.12.2 真机 install/remove 全流程验证；官方 SDK 出包仍待 M3。
-- [ ] M3-doc：编写安装与排错说明（apk / opkg 两套）。
-
-## 技术基线
-
-| 层 | 选型 |
-| --- | --- |
-| 固件 | OpenWrt 25.12+ / main，iStoreOS 对应分支 |
-| 采集 | nlbwmon（conntrack netlink），按日账期持久化 |
-| 后端 | ucode + rpcd（`rpcd-mod-ucode`） |
-| 前端 | Vue 3 + Vite（runtime-only，IIFE 产物），挂载在 LuCI view 中 |
-| 打包 | apk（`CONFIG_USE_APK=y`，主推）+ ipk（24.10，维护至 EOL），同一份 Makefile |
-
-本插件不向 nftables 写入任何规则，也不调用 iptables / ip6tables。
+[Apache-2.0](LICENSE)
