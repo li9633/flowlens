@@ -326,9 +326,11 @@ function nlbw_query(day, group) {
 	if (cached != null)
 		return { rows: cached, error: null, cached: true };
 
-	// 历史账期刚刚查过且失败：直接按"无数据"返回，避免每轮询重复执行 nlbw
+	// 历史账期刚刚查过且失败：不再重复执行 nlbw，但仍按"失败"上报。
+	// 不能返回"无数据"：get_device 依赖 error 判断 layer7 分组不可用并回退到 proto，
+	// 若把失败伪装成空结果，热缓存下历史账期会全部变成 0。
 	if (day != today() && cache_miss_valid(day, group))
-		return { rows: [], error: null, cached: true };
+		return { rows: [], error: 'nlbw query failed (cached)', cached: true };
 
 	let bin = nlbw_bin();
 	if (!bin)
