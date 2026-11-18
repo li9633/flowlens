@@ -18,28 +18,24 @@ const BUNDLE_BASE = '/luci-static/resources/wrtbwstat';
 const callGetSummary = rpc.declare({
 	object: 'luci.wrtbwstat',
 	method: 'get_summary',
-	params: [ 'range' ],
-	expect: { ranges: [] }
+	params: [ 'range' ]
 });
 
 const callGetDevices = rpc.declare({
 	object: 'luci.wrtbwstat',
 	method: 'get_devices',
-	params: [ 'range', 'sort', 'keyword' ],
-	expect: { devices: [] }
+	params: [ 'range', 'sort', 'keyword' ]
 });
 
 const callGetDevice = rpc.declare({
 	object: 'luci.wrtbwstat',
 	method: 'get_device',
-	params: [ 'mac', 'range' ],
-	expect: { days: [] }
+	params: [ 'mac', 'range' ]
 });
 
 const callGetSettings = rpc.declare({
 	object: 'luci.wrtbwstat',
-	method: 'get_settings',
-	expect: { refresh_interval: 30 }
+	method: 'get_settings'
 });
 
 function loadStyle() {
