@@ -7,7 +7,7 @@ FlowLens 是一个面向 OpenWrt / iStoreOS 的按设备流量统计插件项目
 - 设计：v2 定稿（Vue 3 + Vite 前端、ucode 后端、nlbwmon 采集）。打包双轨：apk 主推，ipk 维护至 24.10 EOL。
 - 后端：M1 已实现——六个 ubus 方法全部落地，逐日读取 nlbw 账期并聚合，带历史账期缓存与采集告警。已在 OpenWrt rootfs 容器内用 mock nlbw 跑通 144 条断言。
 - 前端：M2a 已完成——`app.js` / `app.css` 已构建入库，`npm run verify` 在 jsdom 中实测挂载通过，gzip 合计 29 KB。
-- 未完成：真机确认 `nlbw` 实际输出列名（容器用的是 mock）；LuCI 联调（M2b）；SDK 实际出包（M3）。
+- 未完成：真机确认 `nlbw` 实际输出列名（容器用的是 mock）；LuCI 联调（M2b）；`luci-app` 出包需完整 buildroot（M3）。
 
 ## 目录结构
 
@@ -102,28 +102,33 @@ sh scripts/build-in-sdk.sh ~/sdk/openwrt-sdk-24.10
 
 ### 实测记录（2026-11-18）
 
-| 包 | 格式 | 结果 |
+| 包 | ipk（24.10.5 SDK） | apk（25.12.6 SDK） |
 | --- | --- | --- |
-| `wrtbwstat` | ipk | ✅ 24.10.5 SDK 实际产出 `wrtbwstat_0.1.0-r1_all.ipk`（3.1 KB） |
-| `luci-app-wrtbwstat` | ipk | ⚠️ 未产出，卡在 SDK 环境（见下） |
-| 两者 | apk | ⚠️ 未产出：25.12 尚未发布正式版；snapshots SDK 下载 5 MB/5 分钟，网络不可用 |
+| `wrtbwstat` | ✅ `wrtbwstat_0.1.0-r1_all.ipk`（3.1 KB） | ✅ `wrtbwstat-0.1.0-r1.apk`（3.0 KB） |
+| `luci-app-wrtbwstat` | ⚠️ 未产出（环境限制，见下） | ⚠️ 未产出（同一限制） |
 
-`wrtbwstat` 的 ipk 已核验：
+`wrtbwstat` 两种格式都已核验，元数据一致、仅格式不同：
 
 ```text
-control: Package: wrtbwstat / Version: 0.1.0-r1 / Depends: libc, nlbwmon, rpcd-mod-ucode
-         Architecture: all / License: Apache-2.0
-conffiles: /etc/config/wrtbwstat
-data: /etc/config/wrtbwstat(0600) /etc/sysctl.d/99-wrtbwstat.conf(0644)
-      /etc/uci-defaults/80_wrtbwstat(0755)
+ipk control : Package: wrtbwstat / Version: 0.1.0-r1 / Architecture: all
+              Depends: libc, nlbwmon, rpcd-mod-ucode / License: Apache-2.0
+              conffiles: /etc/config/wrtbwstat
+apk adbdump : name: wrtbwstat / version: 0.1.0-r1 / arch: noarch
+              depends: libc, nlbwmon, rpcd-mod-ucode / provides: wrtbwstat-any
+              conffiles 记录在 lib/apk/packages/wrtbwstat.conffiles
+data（两者） : /etc/config/wrtbwstat (0600)
+              /etc/sysctl.d/99-wrtbwstat.conf (0644)
+              /etc/uci-defaults/80_wrtbwstat (0755)
 ```
 
-`luci-app-wrtbwstat` 在本环境无法编译的原因：`luci.mk` 强制 `luci-base` 的 host 编译，而 `luci-base` → `lucihttp` → 需要 `libucode` 的头文件；OpenWrt SDK **不包含核心包源码**（`package/` 下只有 kernel 与 toolchain），`staging_dir/target-*/usr/include` 是空的。这不是本仓库的问题——任何 LuCI 应用在裸 SDK 里都会撞上同一堵墙。出应用包需要：
+`luci-app-wrtbwstat` 在裸 SDK 里编不出来，两条线原因相同：`luci.mk` 强制 host 编译 `luci-base`，而 `luci-base` 依赖 `liblucihttp-ucode` → `lucihttp` 的 ucode 绑定需要 `ucode/module.h`。OpenWrt SDK **不包含核心包源码**（`package/` 下只有 kernel 与 toolchain，`staging_dir/target-*/usr/include` 为空），且该绑定由 `luci-base` 强制选中，无法通过改 `.config` 绕开。这不是本仓库的问题——任何 LuCI 应用都会撞上。出应用包需要：
 
 - 完整 buildroot（`git clone openwrt` + feeds，`make package/flowlens/luci-app-wrtbwstat/compile`），或
-- 一个 `staging_dir` 里带 libucode 头文件的 SDK。
+- 一个 `staging_dir` 里带 `libucode` 头文件的 SDK。
 
-`wrtbwstat` 能出包正因为它不依赖 `luci.mk`，只 `include $(INCLUDE_DIR)/package.mk`。
+`wrtbwstat` 能出包正因为它只 `include $(INCLUDE_DIR)/package.mk`，不碰 `luci.mk`。
+
+> 附：25.12.6 SDK 解压后约 2.5 GB；构建前若缺 `.config`，直接 `make` 会拉起交互式 menuconfig 并因 `$TERM=unknown` 失败，先 `make defconfig` 即可。
 
 安装：
 
@@ -256,8 +261,8 @@ ubus call luci.wrtbwstat get_device '{"mac":"aa:bb:cc:dd:ee:ff","range":"last7"}
 - [x] M2a：依赖安装与构建跑通，`app.js` / `app.css` / `package-lock.json` 入库；`npm run verify` 在 jsdom 中实测挂载通过。
 - [ ] M2b：25.12 LuCI 中联调薄壳 view，验证会话、ACL、poll 生命周期。
 - [x] M3-ipk：24.10.5 SDK 产出 `wrtbwstat` 的 ipk 并核验 control / conffiles / 文件权限。
-- [ ] M3-ipk-app：`luci-app-wrtbwstat` 的 ipk 需完整 buildroot（裸 SDK 缺 libucode 头文件）。
-- [ ] M3-apk：25.12 正式版发布后用其 SDK 出 apk；当前 snapshots SDK 下载不可用。
+- [x] M3-apk：25.12.6 SDK 产出 `wrtbwstat-0.1.0-r1.apk` 并核验元数据与权限。
+- [ ] M3-app：`luci-app-wrtbwstat` 的 ipk/apk 均需完整 buildroot（裸 SDK 缺 libucode 头文件）。
 - [ ] M3-doc：编写安装与排错说明（apk / opkg 两套）。
 
 ## 技术基线
