@@ -1,0 +1,174 @@
+#!/usr/bin/env ucode
+// SPDX-License-Identifier: Apache-2.0
+//
+// luci.wrtbwstat —— FlowLens 后端 ubus 对象
+//
+// 目标固件：OpenWrt 25.12+（rpcd-mod-ucode + ucode 环境）
+// 依据：doc/OpenWrt流量统计插件设计文档_v2.md 第 5.1、4.4 节
+//
+// 当前状态：M1 骨架。接口签名与返回结构已按契约固定，
+// 数据聚合逻辑（读取 nlbwmon 日账期库、MAC 归并、别名回退）待实现。
+'use strict';
+
+const fs = require('fs');
+const uci = require('uci');
+
+const RANGES = [ 'today', 'yesterday', 'last7', 'last30', 'last90' ];
+const RANGE_DAYS = { today: 1, yesterday: 1, last7: 7, last30: 30, last90: 90 };
+const DEFAULT_RETENTION_DAYS = 95;
+const DEFAULT_REFRESH_INTERVAL = 30;
+
+// ---------------------------------------------------------------------------
+// 配置读取
+// ---------------------------------------------------------------------------
+
+function uci_get(config, section, option) {
+	try {
+		const ctx = uci.cursor();
+		const value = ctx.get(config, section, option);
+		return (value == null) ? null : value;
+	}
+	catch (e) {
+		return null;
+	}
+}
+
+function read_settings() {
+	return {
+		storage_dir: uci_get('wrtbwstat', 'settings', 'storage_dir') ?? '/mnt/usb/nlbwmon',
+		retention_days: +(uci_get('wrtbwstat', 'settings', 'retention_days') ?? DEFAULT_RETENTION_DAYS),
+		refresh_interval: +(uci_get('wrtbwstat', 'settings', 'refresh_interval') ?? DEFAULT_REFRESH_INTERVAL),
+		collector_dir: uci_get('nlbwmon', '@nlbwmon[0]', 'database_directory') ?? null,
+		collector_interval: uci_get('nlbwmon', '@nlbwmon[0]', 'database_interval') ?? null,
+		local_networks: []
+	};
+}
+
+function normalize_range(range) {
+	return (range in RANGE_DAYS) ? range : 'today';
+}
+
+function normalize_sort(sort) {
+	const allowed = [ 'total', 'rx', 'tx', 'hostname', 'mac' ];
+	return (allowed.indexOf(sort) >= 0) ? sort : 'total';
+}
+
+// ---------------------------------------------------------------------------
+// 数据聚合（TODO(M1)）
+// ---------------------------------------------------------------------------
+
+// 按时间窗枚举自然日，返回 [ 'YYYY-MM-DD', ... ]，以路由器本地时区为准。
+function enumerate_days(range) {
+	// TODO(M1)：用 date 计算结果，今日/昨日各 1 天，last7/30/90 含今日。
+	return [];
+}
+
+// 读取指定日期的 nlbwmon 账期库：nlbw -c json -n -t YYYY-MM-DD
+// 不直接解析数据库文件，避免绑定内部格式。
+function read_day(date) {
+	// TODO(M1)：fs.popen('nlbw -c json -n -t <date>') 并用 json() 解析。
+	return [];
+}
+
+// 把 nlbwmon 的 MAC/IP/协议记录聚合成设备粒度（同 MAC 的多个 IPv6 合并）。
+function aggregate(days, filters) {
+	// TODO(M1)：按 MAC 归并 rx/tx，计算 share、first_seen、last_seen。
+	return [];
+}
+
+// 设备名三级回退：自定义别名 -> DHCP 租约 hostname -> MAC
+function resolve_hostname(mac) {
+	// TODO(M1)：先读 /etc/config/wrtbwstat 的 alias 段，再读 /tmp/dhcp.leases。
+	return mac;
+}
+
+// ---------------------------------------------------------------------------
+// 方法实现
+// ---------------------------------------------------------------------------
+
+const methods = {};
+
+methods.get_summary = {
+	args: { range: '' },
+	call: function(request) {
+		const range = normalize_range(request.args?.range);
+		return {
+			range: range,
+			updated: Math.floor(Date.now() / 1000),
+			// 五个时间窗的汇总；前端总览卡片与趋势条消费该字段
+			ranges: RANGES.map(function(r) {
+				return {
+					range: r,
+					days: RANGE_DAYS[r],
+					rx_bytes: 0,
+					tx_bytes: 0,
+					total_bytes: 0,
+					series: []
+				};
+			})
+		};
+	}
+};
+
+methods.get_devices = {
+	args: { range: '', sort: '', keyword: '' },
+	call: function(request) {
+		const range = normalize_range(request.args?.range);
+		const sort = normalize_sort(request.args?.sort);
+		const keyword = request.args?.keyword ?? '';
+
+		return {
+			range: range,
+			sort: sort,
+			keyword: keyword,
+			total_bytes: 0,
+			devices: []
+		};
+	}
+};
+
+methods.get_device = {
+	args: { mac: '', range: '' },
+	call: function(request) {
+		const mac = (request.args?.mac ?? '').toLowerCase();
+		const range = normalize_range(request.args?.range);
+
+		return {
+			mac: mac,
+			hostname: resolve_hostname(mac),
+			range: range,
+			days: [],
+			protocols: []
+		};
+	}
+};
+
+methods.get_settings = {
+	args: {},
+	call: function() {
+		return read_settings();
+	}
+};
+
+methods.set_settings = {
+	args: { storage_dir: '', retention_days: 0, refresh_interval: 0 },
+	call: function(request) {
+		// TODO(M1)：校验 storage_dir 不在 tmpfs、retention_days >= 90，
+		// 写入 /etc/config/wrtbwstat 后 commit，并重新生成 nlbwmon 基线。
+		return { success: false, message: 'not implemented (M1)' };
+	}
+};
+
+methods.reset_database = {
+	args: { confirm: false },
+	call: function(request) {
+		// 危险操作：必须显式 confirm=true，仅供设置页二次确认后调用。
+		if (request.args?.confirm !== true)
+			return { success: false, message: 'confirmation required' };
+
+		// TODO(M1)：停止 nlbwmon -> 删除 database_directory 下账期库 -> 重启。
+		return { success: false, message: 'not implemented (M1)' };
+	}
+};
+
+return { 'luci.wrtbwstat': methods };

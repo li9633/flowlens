@@ -1,0 +1,13 @@
+{
+	"admin/network/wrtbwstat": {
+		"title": "FlowLens",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "wrtbwstat/overview"
+		},
+		"depends": {
+			"acl": [ "luci-app-wrtbwstat" ]
+		}
+	}
+}

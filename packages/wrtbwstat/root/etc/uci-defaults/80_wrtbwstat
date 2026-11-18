@@ -1,0 +1,68 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+#
+# 80_wrtbwstat —— 首次安装时把 nlbwmon 调整为 FlowLens 要求的采集基线。
+# 幂等：已配置过的项不会重复写入；用户手工改过的 database_directory 会保留提示。
+#
+# 依据：doc/OpenWrt流量统计插件设计文档_v2.md 第 4.3 节
+
+[ -f /lib/functions.sh ] && . /lib/functions.sh
+
+STORAGE_DIR="$(uci -q get wrtbwstat.settings.storage_dir)"
+RETENTION_DAYS="$(uci -q get wrtbwstat.settings.retention_days)"
+COMMIT_INTERVAL="$(uci -q get wrtbwstat.settings.commit_interval)"
+COMPRESS="$(uci -q get wrtbwstat.settings.compress)"
+
+[ -n "$STORAGE_DIR" ]    || STORAGE_DIR="/mnt/usb/nlbwmon"
+[ -n "$RETENTION_DAYS" ] || RETENTION_DAYS="95"
+[ -n "$COMMIT_INTERVAL" ] || COMMIT_INTERVAL="6h"
+[ -n "$COMPRESS" ]       || COMPRESS="1"
+
+# --- nlbwmon 日账期基线 -----------------------------------------------------
+uci -q batch <<-EOF
+	set nlbwmon.@nlbwmon[0].database_interval='2026-01-01/1'
+	set nlbwmon.@nlbwmon[0].database_generations='${RETENTION_DAYS}'
+	set nlbwmon.@nlbwmon[0].commit_interval='${COMMIT_INTERVAL}'
+	set nlbwmon.@nlbwmon[0].database_compress='${COMPRESS}'
+	commit nlbwmon
+EOF
+
+# database_directory 只在尚未配置或仍为默认 tmpfs 路径时写入，
+# 避免覆盖用户已选择的其他持久化位置。
+CURRENT_DIR="$(uci -q get nlbwmon.@nlbwmon[0].database_directory)"
+case "$CURRENT_DIR" in
+	""|/tmp/*|/var/*)
+		uci -q set nlbwmon.@nlbwmon[0].database_directory="${STORAGE_DIR}"
+		uci -q commit nlbwmon
+		;;
+esac
+
+# local_network 至少包含 lan；其他网段需用户在设置页补充。
+case " $(uci -q get nlbwmon.@nlbwmon[0].local_network) " in
+	*" lan "*) ;;
+	*) uci -q add_list nlbwmon.@nlbwmon[0].local_network='lan'; uci -q commit nlbwmon ;;
+esac
+
+# --- 存储目录 ---------------------------------------------------------------
+STORAGE_DIR_NOW="$(uci -q get nlbwmon.@nlbwmon[0].database_directory)"
+if [ -n "$STORAGE_DIR_NOW" ]; then
+	mkdir -p "$STORAGE_DIR_NOW" 2>/dev/null
+fi
+
+# 存储目录若仍落在 tmpfs，页面会告警；此处不做强改，只记录日志。
+case "$STORAGE_DIR_NOW" in
+	/tmp/*|/var/*)
+		logger -t wrtbwstat "WARNING: nlbwmon database_directory '$STORAGE_DIR_NOW' is on tmpfs; history will be lost on reboot"
+		;;
+esac
+
+# --- conntrack accounting ---------------------------------------------------
+# 只对新建立的连接生效，需重启 nlbwmon / 等待连接重建。
+if [ "$(cat /proc/sys/net/netfilter/nf_conntrack_acct 2>/dev/null)" != "1" ]; then
+	sysctl -q -w net.netfilter.nf_conntrack_acct=1 2>/dev/null
+fi
+
+/etc/init.d/nlbwmon enable 2>/dev/null
+/etc/init.d/nlbwmon restart 2>/dev/null
+
+exit 0

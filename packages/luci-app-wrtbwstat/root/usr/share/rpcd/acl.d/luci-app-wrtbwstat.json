@@ -1,0 +1,34 @@
+{
+	"luci-app-wrtbwstat": {
+		"description": "Grant access to FlowLens per-device traffic statistics",
+		"read": {
+			"ubus": {
+				"luci.wrtbwstat": [
+					"get_summary",
+					"get_devices",
+					"get_device",
+					"get_settings"
+				]
+			},
+			"uci": [
+				"wrtbwstat",
+				"nlbwmon"
+			]
+		},
+		"write": {
+			"ubus": {
+				"luci.wrtbwstat": [
+					"set_settings",
+					"reset_database"
+				]
+			},
+			"uci": [
+				"wrtbwstat",
+				"nlbwmon"
+			],
+			"file": {
+				"/etc/sysctl.d/99-wrtbwstat.conf": [ "write" ]
+			}
+		}
+	}
+}

@@ -1,0 +1,24 @@
+# 前端依赖与构建缓存
+node_modules/
+frontend/node_modules/
+.vite/
+*.local
+
+# 构建产物另行显式提交（htdocs/luci-static/resources/wrtbwstat/），此处只忽略临时目录
+dist/
+
+# OpenWrt / 打包产物
+*.ipk
+*.apk
+bin/
+build_dir/
+staging_dir/
+tmp/
+logs/
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

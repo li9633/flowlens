@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# FlowLens / wrtbwstat 插件自身配置
+# 注意：nlbwmon 的采集参数在 /etc/config/nlbwmon，本文件只放插件层设置。
+
+config settings 'settings'
+	# nlbwmon 数据库目录。必须位于持久化存储，不能是 /tmp 或 /var（tmpfs）。
+	option storage_dir '/mnt/usb/nlbwmon'
+
+	# 账期保留代数，需覆盖 90 天查询窗口（默认 95 天留 5 天冗余）
+	option retention_days '95'
+
+	# nlbwmon 落盘间隔
+	option commit_interval '6h'
+
+	# 压缩旧账期库，控制闪存/U 盘占用
+	option compress '1'
+
+	# 前端自动刷新间隔，0 表示关闭；可选 0 / 10 / 30 / 60
+	option refresh_interval '30'
+
+# 设备别名示例（未启用时由 DHCP hostname 或 MAC 回退）
+# config alias
+# 	option mac 'aa:bb:cc:dd:ee:ff'
+# 	option name '客厅电视'
