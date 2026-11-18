@@ -41,6 +41,18 @@
 	cursor: pointer;
 }
 
+/* --- 告警条 --- */
+
+.flowlens-warnings {
+	margin: 0 0 0.75rem;
+	padding: 0.5rem 0.75rem 0.5rem 1.75rem;
+	border-left: 3px solid var(--fl-tx);
+	background: var(--background-color-low, #f7f7f7);
+	color: var(--fl-muted);
+	font-size: 0.85rem;
+	line-height: 1.5;
+}
+
 /* --- 汇总卡片 --- */
 
 .flowlens-cards {

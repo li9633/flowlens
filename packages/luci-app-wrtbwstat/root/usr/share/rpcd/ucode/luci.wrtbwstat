@@ -4,86 +4,480 @@
 // luci.wrtbwstat —— FlowLens 后端 ubus 对象
 //
 // 目标固件：OpenWrt 25.12+（rpcd-mod-ucode + ucode 环境）
-// 依据：doc/OpenWrt流量统计插件设计文档_v2.md 第 5.1、4.4 节
+// 依据：doc/OpenWrt流量统计插件设计文档_v2.md 第 4.4、5.1 节
 //
-// 当前状态：M1 骨架。接口签名与返回结构已按契约固定，
-// 数据聚合逻辑（读取 nlbwmon 日账期库、MAC 归并、别名回退）待实现。
+// 设计要点：
+//   1. 只通过 `nlbw -c json` 读取数据，不解析 nlbwmon 数据库文件格式。
+//   2. 账期按自然日切分：今日读守护进程活跃库（不带 -t），历史日读归档库（-t）。
+//   3. nlbw 单次调用只能读一个账期，多日窗口需逐日聚合，
+//      因此对"今天以外的账期"做只读缓存（历史账期归档后不再变化）。
+//   4. 设备维度以 MAC 归并，同 MAC 的多个 IPv4/IPv6 地址自然合并。
 'use strict';
 
-const fs = require('fs');
-const uci = require('uci');
+import { popen, readfile, writefile, mkdir, unlink, stat, access, glob } from 'fs';
+import { cursor } from 'uci';
 
-const RANGES = [ 'today', 'yesterday', 'last7', 'last30', 'last90' ];
-const RANGE_DAYS = { today: 1, yesterday: 1, last7: 7, last30: 30, last90: 90 };
+const NLBW_BIN = '/usr/bin/nlbw';
+const CACHE_DIR = '/tmp/wrtbwstat-cache';
+const UNKNOWN_MAC = '00:00:00:00:00:00';
+const UNKNOWN_NAME = '未知设备';
+
+const RANGES = { today: 1, yesterday: 1, last7: 7, last30: 30, last90: 90 };
+const SORTS = [ 'total', 'rx', 'tx', 'hostname', 'mac' ];
+const REFRESH_CHOICES = [ 0, 10, 30, 60 ];
+
 const DEFAULT_RETENTION_DAYS = 95;
 const DEFAULT_REFRESH_INTERVAL = 30;
 
 // ---------------------------------------------------------------------------
-// 配置读取
+// 通用工具
 // ---------------------------------------------------------------------------
 
-function uci_get(config, section, option) {
+function num(v) {
+	if (v == null) return 0;
+	let n = +v;
+	return (n == n) ? n : 0;   // 过滤 NaN
+}
+
+/** 执行命令并收集 stdout；失败时 rc != 0 */
+function run(cmd) {
 	try {
-		const ctx = uci.cursor();
-		const value = ctx.get(config, section, option);
-		return (value == null) ? null : value;
+		let fd = popen(cmd, 'r');
+		if (!fd) return { rc: -1, out: '', error: 'popen failed' };
+		let out = fd.read('all') ?? '';
+		let rc = fd.close();
+		return { rc: (rc == null) ? 0 : rc, out, error: null };
+	}
+	catch (e) {
+		return { rc: -1, out: '', error: '' + e };
+	}
+}
+
+function is_digits(s) {
+	if (length(s) == 0) return false;
+	for (let i = 0; i < length(s); i++) {
+		let c = substr(s, i, 1);
+		if (c < '0' || c > '9') return false;
+	}
+	return true;
+}
+
+function is_day(s) {
+	if (type(s) != 'string' || length(s) != 10) return false;
+	if (substr(s, 4, 1) != '-' || substr(s, 7, 1) != '-') return false;
+	return is_digits(substr(s, 0, 4)) && is_digits(substr(s, 5, 2)) && is_digits(substr(s, 8, 2));
+}
+
+function is_mac(s) {
+	if (type(s) != 'string' || length(s) != 17) return false;
+	for (let i in [ 2, 5, 8, 11, 14 ])
+		if (substr(s, i, 1) != ':') return false;
+	for (let i in [ 0, 1, 3, 4, 6, 7, 9, 10, 12, 13, 15, 16 ]) {
+		let c = lc(substr(s, i, 1));
+		if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+	}
+	return true;
+}
+
+function normalize_mac(m) {
+	let s = lc(trim(m ?? ''));
+	return is_mac(s) ? s : null;
+}
+
+/** 判断路径是否落在 tmpfs（重启即失）——用于拒绝把数据库目录设在内存文件系统 */
+function is_tmpfs_path(p) {
+	if (type(p) != 'string' || length(p) == 0)
+		return false;
+
+	let s = (substr(p, length(p) - 1, 1) == '/') ? substr(p, 0, length(p) - 1) : p;
+
+	return (s == '/tmp' || s == '/var' || substr(s, 0, 5) == '/tmp/' || substr(s, 0, 5) == '/var/');
+}
+
+// ---------------------------------------------------------------------------
+// 时间窗与自然日枚举（以路由器本地时区为准）
+// ---------------------------------------------------------------------------
+
+function fmt_day(d) {
+	return sprintf('%04d-%02d-%02d', d.year, d.mon, d.mday);
+}
+
+function today() {
+	return fmt_day(localtime());
+}
+
+/**
+ * 相对今天偏移 offset 天的日期字符串。
+ *
+ * 用本地时间 12:00 作锚点再做 timelocal 归一化：
+ *   - mday 越界由 timelocal 自动进位（文档明确支持 "October 40th -> November 9th"）；
+ *   - 取中午而非 00:00，避开少数时区在午夜切换夏令时造成的日期歧义。
+ */
+function day_at(offset) {
+	let base = localtime();
+	let ts = timelocal({
+		sec: 0, min: 0, hour: 12,
+		mday: base.mday - offset,
+		mon: base.mon,
+		year: base.year
+	});
+
+	if (ts == null)
+		return null;
+
+	return fmt_day(localtime(ts));
+}
+
+/** 由旧到新返回 count 个自然日，末位为今天 */
+function day_list(count) {
+	let out = [];
+
+	for (let i = count - 1; i >= 0; i--) {
+		let d = day_at(i);
+		if (d) push(out, d);
+	}
+
+	return out;
+}
+
+function range_days(range) {
+	return RANGES[range] ?? 1;
+}
+
+function normalize_range(range) {
+	return (type(range) == 'string' && RANGES[range] != null) ? range : 'today';
+}
+
+function normalize_sort(sort) {
+	return (type(sort) == 'string' && SORTS[sort] != null) ? sort : 'total';
+}
+
+// ---------------------------------------------------------------------------
+// nlbw 查询与缓存
+// ---------------------------------------------------------------------------
+
+function cache_file(day, group) {
+	return sprintf('%s/%s-%s.json', CACHE_DIR, replace(day, '-', ''), replace(group, ',', '_'));
+}
+
+function cache_read(day, group) {
+	if (day == today()) return null;              // 今天的账期仍在增长，不缓存
+
+	let file = cache_file(day, group);
+	if (!access(file)) return null;
+
+	let raw = readfile(file);
+	if (!raw) return null;
+
+	try {
+		let rows = json(raw);
+		return (type(rows) == 'array') ? rows : null;
 	}
 	catch (e) {
 		return null;
 	}
 }
 
+function cache_write(day, group, rows) {
+	if (day == today()) return;
+
+	try {
+		mkdir(CACHE_DIR);
+		writefile(cache_file(day, group), sprintf('%J', rows));
+	}
+	catch (e) {
+		// 缓存失败不影响主流程
+	}
+}
+
+function cache_clear() {
+	for (let file in glob(CACHE_DIR + '/*')) {
+		try { unlink(file); } catch (e) {}
+	}
+}
+
+/**
+ * 查询某个账期的 nlbw 数据。
+ *
+ * @param day     YYYY-MM-DD
+ * @param group   nlbw 的 -g 参数，如 'mac' 或 'mac,layer7'
+ * @returns { rows, error }
+ *
+ * `nlbw -c json` 输出 { "columns": [...], "data": [[...], ...] }，
+ * 列集合随 -g 变化，因此按列名映射而不是按固定下标取值。
+ */
+function nlbw_query(day, group) {
+	if (!is_day(day))
+		return { rows: [], error: 'invalid date: ' + day };
+
+	let cached = cache_read(day, group);
+	if (cached != null)
+		return { rows: cached, error: null, cached: true };
+
+	if (!access(NLBW_BIN))
+		return { rows: [], error: NLBW_BIN + ' not found (nlbwmon missing?)' };
+
+	let cmd = sprintf('%s -c json -n -g %s -o -rx_bytes', NLBW_BIN, group);
+
+	// 今天读守护进程的活跃数据库；历史日期读归档库
+	if (day != today())
+		cmd += ' -t ' + day;
+
+	cmd += ' 2>/dev/null';
+
+	let res = run(cmd);
+	if (res.rc != 0 || length(res.out) == 0)
+		return { rows: [], error: res.error ?? ('nlbw exited with ' + res.rc) };
+
+	let parsed;
+	try {
+		parsed = json(res.out);
+	}
+	catch (e) {
+		return { rows: [], error: 'failed to parse nlbw json: ' + e };
+	}
+
+	let columns = (type(parsed?.columns) == 'array') ? parsed.columns : [];
+	let data = (type(parsed?.data) == 'array') ? parsed.data : [];
+	let rows = [];
+
+	for (let rec in data) {
+		if (type(rec) != 'array') continue;
+
+		let obj = {};
+		for (let i = 0; i < length(columns); i++)
+			obj[columns[i]] = rec[i];
+
+		push(rows, obj);
+	}
+
+	cache_write(day, group, rows);
+
+	return { rows, error: null };
+}
+
+// ---------------------------------------------------------------------------
+// 设备名解析：自定义别名 -> DHCP 租约 -> MAC
+// ---------------------------------------------------------------------------
+
+function alias_map() {
+	let map = {};
+
+	try {
+		let ctx = cursor();
+		ctx.load('wrtbwstat');
+		ctx.foreach('wrtbwstat', 'alias', function(section) {
+			let mac = normalize_mac(section.mac);
+			if (mac && section.name && length(section.name) > 0)
+				map[mac] = section.name;
+		});
+	}
+	catch (e) {}
+
+	return map;
+}
+
+function lease_map() {
+	let map = {};
+	let raw = readfile('/tmp/dhcp.leases') ?? '';
+
+	// 每行格式：expiry mac ip hostname clientid，hostname 为 * 表示客户端未上报
+	for (let line in split(trim(raw), '\n')) {
+		let f = split(trim(line));
+		if (length(f) >= 4) {
+			let mac = normalize_mac(f[1]);
+			if (mac && f[3] != '*' && length(f[3]) > 0)
+				map[mac] = f[3];
+		}
+	}
+
+	return map;
+}
+
+/** 返回一个 mac -> 显示名的解析函数；每次请求只读一次别名与租约 */
+function hostname_resolver() {
+	let aliases = alias_map();
+	let leases = lease_map();
+
+	return function(mac) {
+		if (!mac) return UNKNOWN_NAME;
+		return aliases[mac] ?? leases[mac] ?? mac;
+	};
+}
+
+// ---------------------------------------------------------------------------
+// 聚合
+// ---------------------------------------------------------------------------
+
+/** 单日按 MAC 汇总：{ mac: { rx_bytes, tx_bytes, conns } } */
+function day_by_mac(day) {
+	let out = {};
+	let q = nlbw_query(day, 'mac');
+
+	for (let r in q.rows) {
+		let mac = normalize_mac(r.mac);
+		if (!mac) continue;
+
+		let e = out[mac];
+		if (!e)
+			e = out[mac] = { rx_bytes: 0, tx_bytes: 0, conns: 0 };
+
+		e.rx_bytes += num(r.rx_bytes);
+		e.tx_bytes += num(r.tx_bytes);
+		e.conns += num(r.conns);
+	}
+
+	return out;
+}
+
+/** 单日全网总量 */
+function day_total(day) {
+	let per = day_by_mac(day);
+	let rx = 0, tx = 0;
+
+	for (let mac in per) {
+		rx += per[mac].rx_bytes;
+		tx += per[mac].tx_bytes;
+	}
+
+	return { rx_bytes: rx, tx_bytes: tx };
+}
+
+/**
+ * 多日聚合为设备数组。
+ *
+ * share 以本时间窗内全网总量为分母。
+ * first_seen / last_seen 无法从 nlbw 的账期摘要中还原，返回 null，
+ * 另给 days_active 表示窗口内有流量的天数。
+ */
+function aggregate(days) {
+	let devs = {};
+	let total = 0;
+
+	for (let day in days) {
+		let per = day_by_mac(day);
+
+		for (let mac in per) {
+			let e = devs[mac];
+			if (!e)
+				e = devs[mac] = { mac: mac, rx_bytes: 0, tx_bytes: 0, conns: 0, days_active: 0 };
+
+			e.rx_bytes += per[mac].rx_bytes;
+			e.tx_bytes += per[mac].tx_bytes;
+			e.conns += per[mac].conns;
+			e.days_active++;
+		}
+
+		for (let mac in per)
+			total += per[mac].rx_bytes + per[mac].tx_bytes;
+	}
+
+	let out = [];
+
+	for (let mac in devs) {
+		let e = devs[mac];
+		let sum = e.rx_bytes + e.tx_bytes;
+
+		push(out, {
+			mac: e.mac,
+			rx_bytes: e.rx_bytes,
+			tx_bytes: e.tx_bytes,
+			total_bytes: sum,
+			conns: e.conns,
+			days_active: e.days_active,
+			share: (total > 0) ? (sum / total) : 0,
+			first_seen: null,
+			last_seen: null
+		});
+	}
+
+	return { devices: out, total_bytes: total };
+}
+
+function sort_devices(list, sortBy) {
+	let key = (sortBy == 'rx') ? 'rx_bytes'
+	        : (sortBy == 'tx') ? 'tx_bytes'
+	        : 'total_bytes';
+
+	sort(list, function(a, b) {
+		if (sortBy == 'hostname') return lc(a.hostname) < lc(b.hostname);
+		if (sortBy == 'mac') return a.mac < b.mac;
+		return a[key] > b[key];    // 数值降序
+	});
+
+	return list;
+}
+
+// ---------------------------------------------------------------------------
+// 系统状态
+// ---------------------------------------------------------------------------
+
+function uci_get(config, section, option) {
+	try {
+		return cursor().get(config, section, option);
+	}
+	catch (e) {
+		return null;
+	}
+}
+
+function collector_info() {
+	let networks = uci_get('nlbwmon', '@nlbwmon[0]', 'local_network');
+
+	if (type(networks) == 'string')
+		networks = split(networks);
+	else if (type(networks) != 'array')
+		networks = [];
+
+	return {
+		directory: uci_get('nlbwmon', '@nlbwmon[0]', 'database_directory'),
+		interval: uci_get('nlbwmon', '@nlbwmon[0]', 'database_interval'),
+		generations: +(uci_get('nlbwmon', '@nlbwmon[0]', 'database_generations') ?? 0),
+		commit_interval: uci_get('nlbwmon', '@nlbwmon[0]', 'commit_interval'),
+		compress: (uci_get('nlbwmon', '@nlbwmon[0]', 'database_compress') ?? '0') == '1',
+		local_networks: networks,
+		binary_present: !!access(NLBW_BIN)
+	};
+}
+
+/** 采集链路风险提示，供页面顶部告警条消费 */
+function collect_warnings() {
+	let warnings = [];
+	let info = collector_info();
+
+	if (!info.binary_present)
+		push(warnings, 'nlbw 命令缺失，nlbwmon 可能未安装。');
+
+	if (!info.directory)
+		push(warnings, 'nlbwmon 未配置数据库目录。');
+	else if (is_tmpfs_path(info.directory))
+		push(warnings, '数据库目录位于 tmpfs（' + info.directory + '），重启后历史数据会丢失。');
+
+	let acct = trim(readfile('/proc/sys/net/netfilter/nf_conntrack_acct') ?? '');
+	if (acct != '1')
+		push(warnings, 'nf_conntrack_acct 未开启，计数可能缺失或偏低。');
+
+	if (length(glob('/sys/module/*fullcone*')) > 0)
+		push(warnings, '检测到 fullcone NAT 模块，可能导致 conntrack 事件无法送达 nlbwmon。');
+
+	if (length(info.local_networks) == 0)
+		push(warnings, 'nlbwmon 未配置 local_network，可能统计不到任何网段。');
+
+	return warnings;
+}
+
 function read_settings() {
 	return {
 		storage_dir: uci_get('wrtbwstat', 'settings', 'storage_dir') ?? '/mnt/usb/nlbwmon',
 		retention_days: +(uci_get('wrtbwstat', 'settings', 'retention_days') ?? DEFAULT_RETENTION_DAYS),
-		refresh_interval: +(uci_get('wrtbwstat', 'settings', 'refresh_interval') ?? DEFAULT_REFRESH_INTERVAL),
-		collector_dir: uci_get('nlbwmon', '@nlbwmon[0]', 'database_directory') ?? null,
-		collector_interval: uci_get('nlbwmon', '@nlbwmon[0]', 'database_interval') ?? null,
-		local_networks: []
+		commit_interval: uci_get('wrtbwstat', 'settings', 'commit_interval') ?? '6h',
+		compress: (uci_get('wrtbwstat', 'settings', 'compress') ?? '1') == '1',
+		refresh_interval: +(uci_get('wrtbwstat', 'settings', 'refresh_interval') ?? DEFAULT_REFRESH_INTERVAL)
 	};
 }
 
-function normalize_range(range) {
-	return (range in RANGE_DAYS) ? range : 'today';
-}
-
-function normalize_sort(sort) {
-	const allowed = [ 'total', 'rx', 'tx', 'hostname', 'mac' ];
-	return (allowed.indexOf(sort) >= 0) ? sort : 'total';
-}
-
 // ---------------------------------------------------------------------------
-// 数据聚合（TODO(M1)）
-// ---------------------------------------------------------------------------
-
-// 按时间窗枚举自然日，返回 [ 'YYYY-MM-DD', ... ]，以路由器本地时区为准。
-function enumerate_days(range) {
-	// TODO(M1)：用 date 计算结果，今日/昨日各 1 天，last7/30/90 含今日。
-	return [];
-}
-
-// 读取指定日期的 nlbwmon 账期库：nlbw -c json -n -t YYYY-MM-DD
-// 不直接解析数据库文件，避免绑定内部格式。
-function read_day(date) {
-	// TODO(M1)：fs.popen('nlbw -c json -n -t <date>') 并用 json() 解析。
-	return [];
-}
-
-// 把 nlbwmon 的 MAC/IP/协议记录聚合成设备粒度（同 MAC 的多个 IPv6 合并）。
-function aggregate(days, filters) {
-	// TODO(M1)：按 MAC 归并 rx/tx，计算 share、first_seen、last_seen。
-	return [];
-}
-
-// 设备名三级回退：自定义别名 -> DHCP 租约 hostname -> MAC
-function resolve_hostname(mac) {
-	// TODO(M1)：先读 /etc/config/wrtbwstat 的 alias 段，再读 /tmp/dhcp.leases。
-	return mac;
-}
-
-// ---------------------------------------------------------------------------
-// 方法实现
+// rpcd 方法
 // ---------------------------------------------------------------------------
 
 const methods = {};
@@ -91,21 +485,61 @@ const methods = {};
 methods.get_summary = {
 	args: { range: '' },
 	call: function(request) {
-		const range = normalize_range(request.args?.range);
+		let range = normalize_range(request.args?.range);
+
+		// 五个时间窗共用同一份 90 天逐日数据，避免重复调用 nlbw
+		let days = day_list(RANGES.last90);
+		let totals = {};
+		let withData = 0;
+
+		for (let day in days) {
+			let t = day_total(day);
+			totals[day] = t;
+			if (t.rx_bytes > 0 || t.tx_bytes > 0) withData++;
+		}
+
+		let ranges = [];
+
+		for (let name in [ 'today', 'yesterday', 'last7', 'last30', 'last90' ]) {
+			let span = RANGES[name];
+			let series = [];
+			let rx = 0, tx = 0;
+
+			if (name == 'yesterday') {
+				let y = day_at(1);
+				let t = (y && totals[y]) ? totals[y] : { rx_bytes: 0, tx_bytes: 0 };
+				rx = t.rx_bytes;
+				tx = t.tx_bytes;
+				if (y) push(series, { date: y, rx_bytes: rx, tx_bytes: tx });
+			}
+			else {
+				for (let i = length(days) - span; i < length(days); i++) {
+					let d = days[i];
+					let t = totals[d] ?? { rx_bytes: 0, tx_bytes: 0 };
+					rx += t.rx_bytes;
+					tx += t.tx_bytes;
+					push(series, { date: d, rx_bytes: t.rx_bytes, tx_bytes: t.tx_bytes });
+				}
+			}
+
+			push(ranges, {
+				range: name,
+				days: span,
+				rx_bytes: rx,
+				tx_bytes: tx,
+				total_bytes: rx + tx,
+				series
+			});
+		}
+
 		return {
-			range: range,
-			updated: Math.floor(Date.now() / 1000),
-			// 五个时间窗的汇总；前端总览卡片与趋势条消费该字段
-			ranges: RANGES.map(function(r) {
-				return {
-					range: r,
-					days: RANGE_DAYS[r],
-					rx_bytes: 0,
-					tx_bytes: 0,
-					total_bytes: 0,
-					series: []
-				};
-			})
+			range,
+			updated: time(),
+			timezone: trim(readfile('/etc/TZ') ?? ''),
+			days_with_data: withData,
+			ranges,
+			warnings: collect_warnings(),
+			errors: access(NLBW_BIN) ? [] : [ 'nlbw 不可用，全部数据为空。' ]
 		};
 	}
 };
@@ -113,16 +547,36 @@ methods.get_summary = {
 methods.get_devices = {
 	args: { range: '', sort: '', keyword: '' },
 	call: function(request) {
-		const range = normalize_range(request.args?.range);
-		const sort = normalize_sort(request.args?.sort);
-		const keyword = request.args?.keyword ?? '';
+		let range = normalize_range(request.args?.range);
+		let sortBy = normalize_sort(request.args?.sort);
+		let keyword = trim(request.args?.keyword ?? '');
+		let days = day_list(range_days(range));
+		let result = aggregate(days);
+		let resolve = hostname_resolver();
+
+		let devices = [];
+		let kw = lc(keyword);
+
+		for (let d in result.devices) {
+			d.hostname = (d.mac == UNKNOWN_MAC) ? UNKNOWN_NAME : resolve(d.mac);
+			d.unknown_source = (d.mac == UNKNOWN_MAC);
+
+			if (length(kw) > 0 && index(lc(d.hostname + ' ' + d.mac), kw) < 0)
+				continue;
+
+			push(devices, d);
+		}
+
+		sort_devices(devices, sortBy);
 
 		return {
-			range: range,
-			sort: sort,
-			keyword: keyword,
-			total_bytes: 0,
-			devices: []
+			range,
+			sort: sortBy,
+			keyword,
+			days,
+			total_bytes: result.total_bytes,
+			device_count: length(devices),
+			devices
 		};
 	}
 };
@@ -130,15 +584,81 @@ methods.get_devices = {
 methods.get_device = {
 	args: { mac: '', range: '' },
 	call: function(request) {
-		const mac = (request.args?.mac ?? '').toLowerCase();
-		const range = normalize_range(request.args?.range);
+		let mac = normalize_mac(request.args?.mac);
+		let range = normalize_range(request.args?.range);
+
+		if (!mac)
+			return { mac: null, hostname: null, range, error: 'invalid mac', days: [], protocols: [] };
+
+		let days = day_list(range_days(range));
+		let series = [];
+		let protos = {};
+		let protoField = null;
+		let errors = [];
+
+		for (let day in days) {
+			// 优先按 layer7（协议名）分组；某些版本不允许按复合字段分组，
+			// 此时退回按协议号分组，前端会显示 "proto 6" 这类标签。
+			let q = nlbw_query(day, 'mac,layer7');
+
+			if (q.error) {
+				q = nlbw_query(day, 'mac,proto');
+				if (q.error) {
+					push(errors, day + ': ' + q.error);
+					continue;
+				}
+			}
+
+			let rx = 0, tx = 0;
+
+			for (let r in q.rows) {
+				if (normalize_mac(r.mac) != mac) continue;
+
+				rx += num(r.rx_bytes);
+				tx += num(r.tx_bytes);
+
+				let name;
+				if (r.layer7 != null) {
+					name = r.layer7;
+					protoField = protoField ?? 'layer7';
+				}
+				else {
+					name = (r.proto != null) ? sprintf('proto %s', r.proto) : 'other';
+					protoField = protoField ?? 'proto';
+				}
+
+				let p = protos[name];
+				if (!p) p = protos[name] = { name, rx_bytes: 0, tx_bytes: 0 };
+				p.rx_bytes += num(r.rx_bytes);
+				p.tx_bytes += num(r.tx_bytes);
+			}
+
+			push(series, { date: day, rx_bytes: rx, tx_bytes: tx });
+		}
+
+		let protoList = [];
+		let ptotal = 0;
+
+		for (let name in protos) {
+			let p = protos[name];
+			p.total_bytes = p.rx_bytes + p.tx_bytes;
+			ptotal += p.total_bytes;
+			push(protoList, p);
+		}
+
+		for (let p in protoList)
+			p.share = (ptotal > 0) ? (p.total_bytes / ptotal) : 0;
+
+		sort(protoList, function(a, b) { return a.total_bytes > b.total_bytes; });
 
 		return {
-			mac: mac,
-			hostname: resolve_hostname(mac),
-			range: range,
-			days: [],
-			protocols: []
+			mac,
+			hostname: hostname_resolver()(mac),
+			range,
+			proto_field: protoField,
+			days: series,
+			protocols: protoList,
+			errors
 		};
 	}
 };
@@ -146,28 +666,186 @@ methods.get_device = {
 methods.get_settings = {
 	args: {},
 	call: function() {
-		return read_settings();
+		let settings = read_settings();
+		let info = collector_info();
+
+		return {
+			storage_dir: settings.storage_dir,
+			retention_days: settings.retention_days,
+			commit_interval: settings.commit_interval,
+			compress: settings.compress,
+			refresh_interval: settings.refresh_interval,
+			collector: info,
+			cache_dir: CACHE_DIR,
+			warnings: collect_warnings()
+		};
 	}
 };
 
 methods.set_settings = {
-	args: { storage_dir: '', retention_days: 0, refresh_interval: 0 },
+	args: { storage_dir: '', retention_days: 0, commit_interval: '', compress: false, refresh_interval: 0 },
 	call: function(request) {
-		// TODO(M1)：校验 storage_dir 不在 tmpfs、retention_days >= 90，
-		// 写入 /etc/config/wrtbwstat 后 commit，并重新生成 nlbwmon 基线。
-		return { success: false, message: 'not implemented (M1)' };
+		let args = request.args ?? {};
+		let errors = [];
+		let changed = [];
+
+		if (args.storage_dir != null) {
+			if (type(args.storage_dir) != 'string' || length(trim(args.storage_dir)) < 2) {
+				push(errors, 'storage_dir 不能为空');
+			}
+			else {
+				let dir = trim(args.storage_dir);
+
+				if (dir == '/' || is_tmpfs_path(dir))
+					push(errors, 'storage_dir 不能位于 tmpfs（/tmp、/var）或根目录，否则重启丢历史');
+				else
+					push(changed, [ 'storage_dir', dir ]);
+			}
+		}
+
+		if (args.retention_days != null) {
+			let n = +args.retention_days;
+
+			if (!(n >= 90 && n <= 3650))
+				push(errors, 'retention_days 需在 90-3650 之间');
+			else
+				push(changed, [ 'retention_days', sprintf('%d', n) ]);
+		}
+
+		if (args.refresh_interval != null) {
+			let n = +args.refresh_interval;
+
+			if (REFRESH_CHOICES[n] == null)
+				push(errors, 'refresh_interval 只能是 0 / 10 / 30 / 60');
+			else
+				push(changed, [ 'refresh_interval', sprintf('%d', n) ]);
+		}
+
+		if (args.commit_interval != null) {
+			let s = (type(args.commit_interval) == 'string') ? trim(args.commit_interval) : '';
+
+			if (length(s) < 2) {
+				push(errors, 'commit_interval 格式应为 6h / 30m 之类');
+			}
+			else {
+				let unit = substr(s, length(s) - 1, 1);
+				let digits = substr(s, 0, length(s) - 1);
+
+				if (!is_digits(digits) || index('smhd', unit) < 0)
+					push(errors, 'commit_interval 格式应为 6h / 30m 之类');
+				else
+					push(changed, [ 'commit_interval', s ]);
+			}
+		}
+
+		if (args.compress != null)
+			push(changed, [ 'compress', args.compress ? '1' : '0' ]);
+
+		if (length(errors) > 0)
+			return { success: false, errors };
+
+		let names = [];
+		for (let kv in changed) push(names, kv[0]);
+
+		try {
+			let ctx = cursor();
+			ctx.load('wrtbwstat');
+
+			// 配置文件被手工删改时自愈：settings 段缺失就补一个
+			if (ctx.get('wrtbwstat', 'settings') == null)
+				ctx.add('wrtbwstat', 'settings');
+
+			for (let kv in changed)
+				ctx.set('wrtbwstat', 'settings', kv[0], kv[1]);
+
+			ctx.commit('wrtbwstat');
+
+			// 影响采集的项同步到 nlbwmon；nlbwmon 未安装时跳过同步
+			let restart = false;
+			let hasCollector = false;
+
+			try {
+				hasCollector = (cursor().get('nlbwmon', '@nlbwmon[0]') != null);
+			}
+			catch (e) {
+				hasCollector = false;
+			}
+
+			if (hasCollector) {
+				ctx.load('nlbwmon');
+
+				for (let kv in changed) {
+					switch (kv[0]) {
+					case 'storage_dir':
+						ctx.set('nlbwmon', '@nlbwmon[0]', 'database_directory', kv[1]);
+						restart = true;
+						break;
+					case 'retention_days':
+						ctx.set('nlbwmon', '@nlbwmon[0]', 'database_generations', kv[1]);
+						break;
+					case 'commit_interval':
+						ctx.set('nlbwmon', '@nlbwmon[0]', 'commit_interval', kv[1]);
+						break;
+					case 'compress':
+						ctx.set('nlbwmon', '@nlbwmon[0]', 'database_compress', kv[1]);
+						break;
+					}
+				}
+
+				ctx.commit('nlbwmon');
+			}
+
+			if (restart) {
+				run('/etc/init.d/nlbwmon restart >/dev/null 2>&1');
+				cache_clear();
+			}
+
+			return { success: true, changed: names, settings: read_settings() };
+		}
+		catch (e) {
+			return { success: false, errors: [ '写入配置失败: ' + e ] };
+		}
 	}
 };
 
 methods.reset_database = {
 	args: { confirm: false },
 	call: function(request) {
-		// 危险操作：必须显式 confirm=true，仅供设置页二次确认后调用。
 		if (request.args?.confirm !== true)
-			return { success: false, message: 'confirmation required' };
+			return { success: false, message: '需要 confirm=true 才能清空数据库' };
 
-		// TODO(M1)：停止 nlbwmon -> 删除 database_directory 下账期库 -> 重启。
-		return { success: false, message: 'not implemented (M1)' };
+		let dir = collector_info().directory;
+
+		if (type(dir) != 'string' || length(dir) < 5 || dir == '/')
+			return { success: false, message: '数据库目录未配置或不可用，已拒绝执行' };
+
+		run('/etc/init.d/nlbwmon stop >/dev/null 2>&1');
+
+		let removed = 0, failed = 0, freed = 0;
+
+		for (let file in glob(dir + '/nlbwmon.db*')) {
+			let st = stat(file);
+			try {
+				if (unlink(file)) {
+					removed++;
+					freed += num(st?.size);
+				}
+			}
+			catch (e) {
+				failed++;
+			}
+		}
+
+		run('/etc/init.d/nlbwmon start >/dev/null 2>&1');
+		cache_clear();
+
+		return {
+			success: (failed == 0),
+			directory: dir,
+			removed,
+			failed,
+			freed_bytes: freed
+		};
 	}
 };
 

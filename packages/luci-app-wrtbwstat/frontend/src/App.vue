@@ -24,6 +24,7 @@ const sort = ref('total');
 const keyword = ref('');
 const summary = ref([]);
 const devices = ref([]);
+const warnings = ref([]);
 const loading = ref(false);
 const error = ref('');
 
@@ -47,6 +48,7 @@ async function load() {
 
 		summary.value = Array.isArray(s?.ranges) ? s.ranges : [];
 		devices.value = Array.isArray(d?.devices) ? d.devices : [];
+		warnings.value = Array.isArray(s?.warnings) ? s.warnings : [];
 	}
 	catch (e) {
 		error.value = e?.message || t('error');
@@ -90,6 +92,11 @@ onMounted(async function() {
 		</div>
 
 		<div v-if="error" class="alert-message warning">{{ error }}</div>
+
+		<!-- 采集链路风险：数据库目录在 tmpfs、conntrack acct 未开、fullcone 冲突等 -->
+		<ul v-if="warnings.length" class="flowlens-warnings">
+			<li v-for="w in warnings" :key="w">{{ w }}</li>
+		</ul>
 
 		<SummaryCards
 			:summary="summary"

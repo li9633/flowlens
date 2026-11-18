@@ -5,9 +5,9 @@ FlowLens 是一个面向 OpenWrt / iStoreOS 的按设备流量统计插件项目
 ## 当前状态
 
 - 设计：v2 定稿（Vue 3 + Vite 前端、ucode 后端、nlbwmon 采集、apk 打包）。
-- 代码：项目骨架已创建，接口签名与返回结构按设计文档固定，业务逻辑多为 `TODO(M1)` 占位。
+- 后端：M1 已实现——六个 ubus 方法全部落地，逐日读取 nlbw 账期并聚合，带历史账期缓存与采集告警。
 - 前端：M2a 已完成——`app.js` / `app.css` 已构建入库，`npm run verify` 在 jsdom 中实测挂载通过，gzip 合计 29 KB。
-- 未完成：nlbwmon 聚合实现（M1）；25.12 真机联调（M2b）；apk 打包（M3）。
+- 未完成：**后端尚未在真机跑过**（本机无 ucode 运行环境，WSL 被安全策略禁用），需按"路由器冒烟测试"验证；25.12 LuCI 联调（M2b）；apk 打包（M3）。
 
 ## 目录结构
 
@@ -84,14 +84,51 @@ ubus 对象 `luci.wrtbwstat`，方法与入参见设计文档 5.1：
 
 | 方法 | 入参 | 当前状态 |
 | --- | --- | --- |
-| `get_summary` | `range` | 返回结构已固定，数值为 0 |
-| `get_devices` | `range`, `sort`, `keyword` | 返回结构已固定，设备数组为空 |
-| `get_device` | `mac`, `range` | 返回结构已固定，序列为空 |
-| `get_settings` | — | 已实现（读 UCI） |
-| `set_settings` | 配置对象 | 占位，返回 `not implemented` |
-| `reset_database` | `confirm` | 占位，已有 `confirm=true` 前置校验 |
+| `get_summary` | `range` | M1 已实现：聚合 90 个自然日后按窗口求和，附 `series`、`warnings` |
+| `get_devices` | `range`, `sort`, `keyword` | M1 已实现：按 MAC 归并、别名/DHCP 名回退、排序与关键词过滤 |
+| `get_device` | `mac`, `range` | M1 已实现：日序列 + 协议分布（`layer7`，不可用时回退协议号） |
+| `get_settings` | — | M1 已实现：插件设置 + nlbwmon 采集状态 + 风险告警 |
+| `set_settings` | 配置对象 | M1 已实现：校验（拒绝 tmpfs 目录、保留期 ≥90、刷新间隔白名单）后写 UCI 并同步 nlbwmon |
+| `reset_database` | `confirm` | M1 已实现：停 nlbwmon → 删 `nlbwmon.db*` → 重启，强制 `confirm=true` |
 
 `range` 取值固定为 `today | yesterday | last7 | last30 | last90`；`sort` 取 `total | rx | tx | hostname | mac`。
+
+### M1 实现要点
+
+- **只读 `nlbw -c json`**，不解析 nlbwmon 数据库文件。`nlbw` 的 JSON 是 `{"columns":[...],"data":[[...]]}`，列集合随 `-g` 变化，所以按**列名**映射而非固定下标。
+- **账期归属**：今天读守护进程活跃库（不带 `-t`），历史日期读归档库（`-t YYYY-MM-DD`）。历史账期归档后不再变化，因此落 `/tmp/wrtbwstat-cache/` 缓存；今天的账期不缓存。`reset_database` 与更换存储目录都会清缓存。
+- **自然日枚举**走 ucode 原生 `localtime()` / `timelocal()`：以本地时间 12:00 为锚点、`mday` 减去偏移，越界由 `timelocal` 归一化进位。取中午而非 00:00，避免少数时区午夜切换夏令时的日期歧义。
+- **成本**：`nlbw` 一次只能读一个账期，`get_summary` 要覆盖近 90 天，首调用会有 90 次进程派生（约 1-3 秒，视设备而定），之后命中缓存。`get_devices(range)` 只读该窗口所需的日数。
+- **已知取舍**：
+  - `first_seen` / `last_seen` 无法从账期摘要还原，返回 `null`，改用 `days_active`（窗口内有流量的天数）表达。
+  - MAC 为 `00:00:00:00:00:00` 的流量（nlbwmon 未解析到源 MAC，多见于 IPv6）单独成一行，标记 `unknown_source: true`。
+  - 协议分布优先按 `layer7` 分组；若该 nlbw 版本不支持按复合字段分组，自动回退 `-g mac,proto`，标签变成 `proto 6` 之类。
+
+### 路由器冒烟测试
+
+后端**尚未在真机验证过**，装包后按顺序执行：
+
+```sh
+# 1. 对象是否注册（rpcd 需要重载才能看到新脚本）
+/etc/init.d/rpcd restart && ubus list luci.wrtbwstat
+
+# 2. 设置与采集状态（最快，先确认 nlbw 路径、目录、conntrack acct、告警文案）
+ubus call luci.wrtbwstat get_settings
+
+# 3. 原始数据是否可读——这一步决定后续解析假设是否成立
+nlbw -c json -n -g mac -o -rx_bytes | head -c 300
+nlbw -c json -n -g mac,layer7 -o -rx_bytes | head -c 300    # 验证 layer7 能否分组
+nlbw -t 2026-11-17 -c json -n -g mac -o -rx_bytes | head -c 300
+
+# 4. 汇总（首次会逐日调用 nlbw，较慢）
+time ubus call luci.wrtbwstat get_summary '{"range":"today"}'
+
+# 5. 设备列表与单设备详情
+ubus call luci.wrtbwstat get_devices '{"range":"last7","sort":"total","keyword":""}'
+ubus call luci.wrtbwstat get_device '{"mac":"aa:bb:cc:dd:ee:ff","range":"last7"}'
+```
+
+第 3 步的输出直接决定解析是否需要调整：若 `columns` 里没有 `rx_bytes` / `mac` 这两个名字，把实际输出贴回来，改 `nlbw_query()` 的列名映射即可。
 
 ## 与设计文档的差异（需确认）
 
@@ -103,8 +140,9 @@ ubus 对象 `luci.wrtbwstat`，方法与入参见设计文档 5.1：
 ## 待办
 
 - [ ] M0：在目标设备验证 `conntrack -E` 事件、nlbwmon 落库与 fullcone 冲突，回填 90 天体积实测。
-- [ ] M1：实现 `enumerate_days` / `read_day`（`nlbw -c json -n -t`）/ `aggregate` / `resolve_hostname`。
-- [ ] M1：`set_settings` 参数校验（拒绝 tmpfs 存储目录）与 `reset_database`。
+- [x] M1：`enumerate_days` / `read_day`（`nlbw -c json -n -t`）/ `aggregate` / `resolve_hostname` / `day_total` / 缓存。
+- [x] M1：`set_settings` 校验（拒绝 tmpfs 目录、保留期、刷新间隔白名单）与 `reset_database`。
+- [ ] M1-verify：按"路由器冒烟测试"在真机跑一遍，确认 `nlbw -c json` 的列名与 `-g mac,layer7` 是否可分组。
 - [x] M2a：依赖安装与构建跑通，`app.js` / `app.css` / `package-lock.json` 入库；`npm run verify` 在 jsdom 中实测挂载通过。
 - [ ] M2b：25.12 LuCI 中联调薄壳 view，验证会话、ACL、poll 生命周期。
 - [ ] M3：SDK 构建 apk，编写安装与排错说明。

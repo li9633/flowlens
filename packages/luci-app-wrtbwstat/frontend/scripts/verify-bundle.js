@@ -55,6 +55,7 @@ if (!window.WrtbwstatApp || typeof window.WrtbwstatApp.mount !== 'function')
 // 与 LuCI 薄壳 view 注入的 api 保持完全同形
 const api = {
 	getSummary: async () => ({
+		warnings: [ 'test-warning: 数据库目录位于 tmpfs' ],
 		ranges: [
 			{ range: 'today', days: 1, rx_bytes: 1073741824, tx_bytes: 268435456, total_bytes: 1342177280, series: [] },
 			{ range: 'yesterday', days: 1, rx_bytes: 2147483648, tx_bytes: 536870912, total_bytes: 2684354560, series: [] }
@@ -89,6 +90,7 @@ setTimeout(() => {
 		'渲染出汇总卡片数值': html.includes('1.25 GB'),
 		'渲染出设备行': html.includes('living-room-tv') && html.includes('macbook'),
 		'渲染出占比': /%/.test(html),
+		'渲染出采集告警': html.includes('test-warning'),
 		'未落入错误分支': !html.includes('Failed to load traffic data')
 	};
 
