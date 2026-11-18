@@ -130,6 +130,18 @@ data（两者） : /etc/config/wrtbwstat (0600)
 
 `wrtbwstat` 能出包正因为它只 `include $(INCLUDE_DIR)/package.mk`，不碰 `luci.mk`。
 
+**完整 buildroot 也试过，被网络挡住**：克隆源码、配好 feeds 后，工具链阶段需要从 `sources.openwrt.org` 下载 gcc/binutils/musl 等上百 MB 源码，该站此网络只有 3–15 KB/s（`downloads.openwrt.org` 同样慢），实际跑不完。脚本保留在 `scripts/build-in-sdk.sh`，换到网络正常的环境可直接用。
+
+### 手工打包 ipk（备用通道，已实测）
+
+`scripts/pack-ipk.sh` 按 OpenWrt 的 ipk 规范（`debian-binary` + `control.tar.gz` + `data.tar.gz`）打包，元数据与 `luci.mk` 对齐。已在 iStoreOS 24.10.8 上实测：`opkg install` → 对象自动注册 → 数据正常；`opkg remove` → 文件清除干净；重装再次生效。
+
+```sh
+sh scripts/pack-ipk.sh          # 产物在 dist/
+```
+
+**一个只有真装才会发现的坑**：包里的 `postinst` 必须与 `luci.mk` 生成的保持一致——除了清 LuCI 索引缓存，还要 `/etc/init.d/rpcd reload`。少了这一步，`opkg install` 明明成功，但 `ubus list` 里没有 `luci.wrtbwstat`，页面一直空白（rpcd 只在启动时加载 ucode 脚本）。`luci.mk` 第 236 行本来就做了这件事，手工打包时容易漏。
+
 > 附：25.12.6 SDK 解压后约 2.5 GB；构建前若缺 `.config`，直接 `make` 会拉起交互式 menuconfig 并因 `$TERM=unknown` 失败，先 `make defconfig` 即可。
 
 安装：
@@ -307,7 +319,8 @@ ubus call luci.wrtbwstat get_device '{"mac":"aa:bb:cc:dd:ee:ff","range":"last7"}
 - [ ] M2b：25.12 LuCI 中联调薄壳 view，验证会话、ACL、poll 生命周期。
 - [x] M3-ipk：24.10.5 SDK 产出 `wrtbwstat` 的 ipk 并核验 control / conffiles / 文件权限。
 - [x] M3-apk：25.12.6 SDK 产出 `wrtbwstat-0.1.0-r1.apk` 并核验元数据与权限。
-- [ ] M3-app：`luci-app-wrtbwstat` 的 ipk/apk 均需完整 buildroot（裸 SDK 缺 libucode 头文件）。
+- [x] M3-app-ipk：`luci-app-wrtbwstat` 的 ipk 已产出并在真机 install/remove 验证（`scripts/pack-ipk.sh`）；SDK/buildroot 出包受 `sources.openwrt.org` 限速所限未完成。
+- [ ] M3-apk-app：应用包的 apk 仍需 25.12 完整环境。
 - [ ] M3-doc：编写安装与排错说明（apk / opkg 两套）。
 
 ## 技术基线
