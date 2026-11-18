@@ -23,3 +23,6 @@ logs/
 Thumbs.db
 *.swp
 dist/
+
+# 本地临时工具（便携 Node、性能剖析脚本等）
+.tmp/

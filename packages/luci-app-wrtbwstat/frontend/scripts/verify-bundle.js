@@ -336,6 +336,42 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 		if (!pass) ok = false;
 	}
 
+	// 性能回归：切时间窗只影响设备列表，汇总（五个窗口的固定结果）不该重拉
+	let summaryCalls = 0;
+	let deviceCalls = 0;
+	const countApi = Object.assign({}, api, {
+		getSummary: async (activeRange) => {
+			summaryCalls++;
+			return api.getSummary(activeRange);
+		},
+		getDevices: async (activeRange, activeSort, activeKeyword) => {
+			deviceCalls++;
+			return api.getDevices(activeRange, activeSort, activeKeyword);
+		}
+	});
+
+	const el5 = window.document.createElement('div');
+	window.document.body.appendChild(el5);
+	window.WrtbwstatApp.mount(el5, countApi);
+	await wait(250);
+
+	const summaryAfterMount = summaryCalls;
+	const devicesAfterMount = deviceCalls;
+
+	const tabYesterday = Array.from(el5.querySelectorAll('[role="tab"]'))
+		.find((b) => b.textContent.trim() === 'Yesterday');
+	tabYesterday.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+	await wait(300);
+
+	for (const [ name, pass ] of Object.entries({
+		'性能：首屏汇总 + 列表各拉一次': summaryAfterMount === 1 && devicesAfterMount === 1,
+		'性能：切窗口不重拉汇总': summaryCalls === summaryAfterMount,
+		'性能：切窗口重拉列表': deviceCalls === devicesAfterMount + 1
+	})) {
+		console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
+		if (!pass) ok = false;
+	}
+
 	if (!ok) {
 		console.log('\n--- innerHTML 片段 ---\n' + el.innerHTML.slice(0, 800));
 		process.exit(1);

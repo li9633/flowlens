@@ -65,8 +65,9 @@ CALLS2=$(wc -l < /tmp/nlbw.calls)
 echo "耗时 $((S3 - S2))s / nlbw 调用 $CALLS2 次"
 tail -2 /tmp/phase2.log
 
-# 失败的 nlbw 查询按设计不写缓存（避免污染），
-# 所以 layer7 回退模式下热跑仍会重复 7 次失败的 mac,layer7，阈值放宽到 20。
+# 失败的账期写入短 TTL 负缓存（避免缺失日期每轮询重跑 nlbw），
+# 因此 layer7 回退模式下热跑只会在负缓存过期后重试失败查询，
+# 调用次数比冷跑更低，阈值同样适用。
 if [ "$CALLS1" -ge 80 ] && [ "$CALLS2" -lt 20 ] && [ "$CALLS2" -lt $((CALLS1 / 3)) ]; then
 	echo "PASS 历史账期缓存生效：冷 $CALLS1 次 -> 热 $CALLS2 次"
 else

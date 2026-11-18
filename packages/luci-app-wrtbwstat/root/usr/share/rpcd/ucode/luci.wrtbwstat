@@ -155,33 +155,34 @@ function today() {
 }
 
 /**
+ * 今天本地时间 00:00 的时间戳。
+ *
+ * 只取一次，之后按 86400 秒推日期：timelocal() 每次都要做完整的字段归一化，
+ * 90 天窗口连续算 90 次要 20ms 左右，占热请求耗时的四分之一。
+ */
+function day_anchor() {
+	let l = localtime();
+	return time() - l.hour * 3600 - l.min * 60 - l.sec;
+}
+
+/**
  * 相对今天偏移 offset 天的日期字符串。
  *
- * 用本地时间 12:00 作锚点再做 timelocal 归一化：
- *   - mday 越界由 timelocal 自动进位（文档明确支持 "October 40th -> November 9th"）；
- *   - 取中午而非 00:00，避开少数时区在午夜切换夏令时造成的日期歧义。
+ * 以「中午 12:00」为锚点做加减：夏令时切换当天 ±1 小时仍在同一天内，
+ * 不会因为 00:00 跨到前一天/后一天。
  */
 function day_at(offset) {
-	let base = localtime();
-	let ts = timelocal({
-		sec: 0, min: 0, hour: 12,
-		mday: base.mday - offset,
-		mon: base.mon,
-		year: base.year
-	});
-
-	if (ts == null)
-		return null;
-
+	let ts = day_anchor() - offset * 86400 + 12 * 3600;
 	return fmt_day(localtime(ts));
 }
 
 /** 由旧到新返回 count 个自然日，末位为今天 */
 function day_list(count) {
 	let out = [];
+	let noon = day_anchor() + 12 * 3600;
 
 	for (let i = count - 1; i >= 0; i--) {
-		let d = day_at(i);
+		let d = fmt_day(localtime(noon - i * 86400));
 		if (d) push(out, d);
 	}
 
@@ -260,6 +261,34 @@ function cache_clear() {
 }
 
 /**
+ * 失败账期的负缓存 TTL（秒）。
+ *
+ * 归档后的历史日期不再变化：如果查不到数据（路由关机、nlbwmon 未运行、归档缺失），
+ * 说明这天就是没有流量。不记住失败的话，每次轮询都会为这些空日期重跑一次 nlbw ——
+ * 新装环境近 90 天里可能缺 89 天，单次请求要多花 0.7 秒。
+ *
+ * 不设成永久：磁盘异常、归档被重新生成等情况下，最多等一个 TTL 就能恢复。
+ */
+const MISS_TTL = 300;
+
+function cache_miss_file(day, group) {
+	return sprintf('%s/%s-%s.miss', CACHE_DIR, day, replace(group, ',', '_'));
+}
+
+function cache_miss_valid(day, group) {
+	let st = stat(cache_miss_file(day, group));
+	return st != null && (time() - st.mtime) < MISS_TTL;
+}
+
+function cache_miss_mark(day, group) {
+	try {
+		mkdir(CACHE_DIR);
+		writefile(cache_miss_file(day, group), sprintf('%d\n', time()));
+	}
+	catch (e) {}
+}
+
+/**
  * 查询某个账期的 nlbw 数据。
  *
  * @param day     YYYY-MM-DD
@@ -277,6 +306,10 @@ function nlbw_query(day, group) {
 	if (cached != null)
 		return { rows: cached, error: null, cached: true };
 
+	// 历史账期刚刚查过且失败：直接按"无数据"返回，避免每轮询重复执行 nlbw
+	if (day != today() && cache_miss_valid(day, group))
+		return { rows: [], error: null, cached: true };
+
 	let bin = nlbw_bin();
 	if (!bin)
 		return { rows: [], error: 'nlbw not found (nlbwmon missing?)' };
@@ -290,8 +323,13 @@ function nlbw_query(day, group) {
 	cmd += ' 2>/dev/null';
 
 	let res = run(cmd);
-	if (res.rc != 0 || length(res.out) == 0)
+	if (res.rc != 0 || length(res.out) == 0) {
+		// 今天的数据库随时在变，失败不能记住；历史日期记住一个 TTL
+		if (day != today())
+			cache_miss_mark(day, group);
+
 		return { rows: [], error: res.error ?? ('nlbw exited with ' + res.rc) };
+	}
 
 	let parsed;
 	try {
