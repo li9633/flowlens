@@ -6,7 +6,7 @@ FlowLens 是一个面向 OpenWrt / iStoreOS 的按设备流量统计插件项目
 
 - 设计：v2 定稿（Vue 3 + Vite 前端、ucode 后端、nlbwmon 采集）。打包双轨：apk 主推，ipk 维护至 24.10 EOL。
 - 后端：M1 已实现——六个 ubus 方法全部落地，逐日读取 nlbw 账期并聚合，带历史账期缓存与采集告警。已在 OpenWrt rootfs 容器内用 mock nlbw 跑通 144 条断言。
-- 前端：M2a 已完成——`app.js` / `app.css` 已构建入库，`npm run verify` 在 jsdom 中实测挂载通过，gzip 合计 29 KB。
+- 前端：M2a 已完成——`app.js` / `app.css` 已构建入库，`npm run verify` 在 jsdom 中实测挂载通过（25 条断言），gzip 合计 41 KB。
 - 真机：已在 iStoreOS 24.10.8（rockchip/armv8，opkg）上部署跑通，页面可显示数据。
 - 前端功能：时间窗切换、汇总卡片、设备表（排序/搜索）、**设备详情（按日用量 + 协议分布）**、**设置页（采集参数 + 清库）** 均已实现。
 - 未完成：跨天/重启后历史保留验证（需真实积累）；`luci-app` 出包需完整 buildroot（M3）。
@@ -36,18 +36,24 @@ flowlens/
 │       ├── frontend/                     # Vue 3 源码，不安装到设备
 │       │   ├── package.json
 │       │   ├── vite.config.js
-│       │   ├── index.html                # M2a 开发预览宿主页
+│       │   ├── index.html                # 开发预览宿主页
+│       │   ├── scripts/verify-bundle.js  # 产物挂载校验（25 条断言）
 │       │   └── src/
 │       │       ├── main.js               # 对外唯一入口 window.WrtbwstatApp
-│       │       ├── App.vue
-│       │       ├── dev.js                # 开发入口，注入 mock api
-│       │       ├── mock.js               # mock RPC，形状与注入 api 一致
-│       │       ├── style.css
-│       │       ├── utils/format.js
-│       │       └── components/
-│       │           ├── RangeTabs.vue
-│       │           ├── SummaryCards.vue
-│       │           └── DeviceTable.vue
+│       │       ├── App.vue               # 只做区块编排与 UI 状态
+│       │       ├── assets/styles/        # tokens.css（设计令牌）+ base.css（复位）
+│       │       ├── components/
+│       │       │   ├── layout/           # AppHeader
+│       │       │   ├── ui/               # 设计系统原子件（按钮/面板/输入/图标…）
+│       │       │   ├── summary/          # 五窗口汇总卡 + 趋势线
+│       │       │   ├── devices/          # 设备表、行、头像、详情、逐日柱、协议
+│       │       │   └── settings/         # 设置面板、字段、危险区
+│       │       ├── composables/          # useTrafficData / useDeviceDetail /
+│       │       │                         #   useSettingsForm / useI18n
+│       │       ├── constants/index.js    # 与后端契约绑定的枚举与默认值
+│       │       ├── utils/                # format / i18n / device / color
+│       │       ├── mocks/                # dev 预览用的 fixtures + mock api
+│       │       └── dev/main.js           # 开发入口，注入 mock api
 │       ├── htdocs/luci-static/resources/
 │       │   ├── view/wrtbwstat/overview.js   # LuCI 薄壳 view
 │       │   └── wrtbwstat/                   # Vite 产物落点（app.js / app.css）
@@ -74,13 +80,29 @@ npm run verify       # 在 jsdom 中挂载产物并断言渲染，同时检查�
 
 改动前端后必须 `npm run build && npm run verify` 再提交，防止产物与源码漂移（验收条目 8/9）。
 
+### 前端目录约定
+
+按 Vue 3 官方推荐的工程结构组织，一条规则对应一个目录，不按"类型混装"：
+
+| 目录 | 放什么 | 判断标准 |
+| --- | --- | --- |
+| `assets/styles/` | `tokens.css` 设计令牌、`base.css` 全局复位 | 只有这两类才允许写全局样式 |
+| `components/ui/` | 与业务无关的原子件（按钮、面板、输入、图标、分段控件…） | 换个项目也能直接用 |
+| `components/<domain>/` | 按业务域分组：`layout` / `summary` / `devices` / `settings` | 只服务本页面，但属于某一业务概念 |
+| `composables/` | 有状态的逻辑：取数、表单、i18n（`useXxx` 命名） | 组件里出现 `async` + 多个 `ref` 就该抽出来 |
+| `utils/` | 纯函数（格式化、设备显示规则、配色散列） | 输入输出确定、无副作用 |
+| `constants/` | 与后端契约绑定的枚举与默认值 | 改这里要同步改 ucode 与 driver.uc |
+| `mocks/` | dev 预览用的 fixtures 与 mock api | 不进产物 |
+
+视觉样式写在各自组件的 `<style scoped>` 里，删组件不会留下孤儿样式；跨组件穿透只用于「表控制行」这类明确归属（`DeviceTable` 用 `:deep()` 管 `DeviceRow` 的单元格）。
+
 ### 体积实测（2026-11-18，vite 7.3.8 / vue 3.5.45）
 
 | 产物 | 原始 | gzip |
 | --- | --- | --- |
-| `app.js`（Vue runtime + 应用组件） | 73.3 KB | 28.7 KB |
-| `app.css` | 2.6 KB | 0.9 KB |
-| 合计 | 75.9 KB | **29.6 KB**（预算 120 KB） |
+| `app.js`（Vue runtime + 应用组件） | 103.2 KB | 37.7 KB |
+| `app.css`（令牌 + 各组件 scoped 样式） | 20.9 KB | 4.4 KB |
+| 合计 | 124.1 KB | **41 KB**（预算 120 KB） |
 
 ### 构建注意
 

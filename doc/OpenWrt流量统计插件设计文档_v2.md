@@ -355,13 +355,23 @@ luci-app-wrtbwstat/
 │   ├── package.json
 │   ├── package-lock.json
 │   ├── vite.config.js
+│   ├── scripts/verify-bundle.js    # 产物挂载校验
 │   └── src/
-│       ├── main.js
-│       ├── App.vue
-│       └── components/
-│           ├── RangeTabs.vue
-│           ├── SummaryCards.vue
-│           └── DeviceTable.vue
+│       ├── main.js                 # 对外入口 window.WrtbwstatApp
+│       ├── App.vue                 # 只做区块编排
+│       ├── assets/styles/          # tokens.css + base.css
+│       ├── components/
+│       │   ├── layout/             # AppHeader
+│       │   ├── ui/                 # 设计系统原子件
+│       │   ├── summary/            # 汇总卡 + 趋势线
+│       │   ├── devices/            # 设备表/行/详情/图表/协议
+│       │   └── settings/           # 设置面板/字段/危险区
+│       ├── composables/            # useTrafficData / useDeviceDetail /
+│       │                           #   useSettingsForm / useI18n
+│       ├── constants/              # 与后端契约绑定的枚举
+│       ├── utils/                  # 纯函数
+│       ├── mocks/                  # dev 预览数据
+│       └── dev/main.js             # 开发入口
 ├── htdocs/luci-static/resources/
 │   ├── view/wrtbwstat/overview.js  # LuCI 薄壳
 │   └── wrtbwstat/

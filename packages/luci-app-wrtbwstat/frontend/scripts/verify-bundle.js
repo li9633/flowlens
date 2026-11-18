@@ -81,7 +81,9 @@ const api = {
 	}),
 	getSettings: async () => ({
 		storage_dir: '/var/lib/nlbwmon', retention_days: 95,
-		commit_interval: '6h', compress: true, refresh_interval: 0,
+		// 故意用非默认值 30：表单若没真正回填，下拉会停在首项 0（"Off"），
+		// 断言就能分辨"渲染了默认值"和"绑上了后端值"
+		commit_interval: '6h', compress: true, refresh_interval: 30,
 		collector: { directory: '/var/lib/nlbwmon' }
 	}),
 	setSettings: async () => ({ success: true }),
@@ -173,6 +175,25 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 			'设置面板渲染保留天数': sh.includes('Retention (days)'),
 			'设置面板渲染危险操作': sh.includes('Danger zone')
 		})) {
+			console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
+			if (!pass) ok = false;
+		}
+
+		/*
+		 * 表单必须"回填"而不是只画出标签：BaseInput/BaseSelect 曾漏把 model
+		 * 绑到原生元素上，标签齐全但输入框全空，只查文字是抓不到的。
+		 */
+		const fields = Array.from(el.querySelectorAll('.fl-form input, .fl-form select'));
+		const values = fields.map((f) => f.value);
+		const checks = {
+			'设置面板回填存储目录值': values[0] === '/var/lib/nlbwmon',
+			'设置面板回填保留天数': values[1] === '95',
+			'设置面板回填刷新间隔': values[3] === '30',
+			'压缩开关处于勾选状态': !!el.querySelector('.fl-switch input')?.checked,
+			'未勾选确认时清库按钮禁用': !!el.querySelector('.fl-btn.is-danger')?.disabled
+		};
+
+		for (const [ name, pass ] of Object.entries(checks)) {
 			console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
 			if (!pass) ok = false;
 		}

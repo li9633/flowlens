@@ -1,0 +1,62 @@
+/**
+ * 全局基础样式
+ *
+ * 只放三件跨组件的事：根容器、标题/段落复位、动效与焦点约定。
+ * 具体视觉一律写在各自组件 SFC 的 <style scoped> 里——这样删一个组件
+ * 不会留下孤儿样式，也不会出现两个组件抢同一个类名。
+ */
+
+.flowlens {
+	display: block;
+	color: var(--fl-text);
+	font-size: 13px;
+	line-height: 1.5;
+	/* 主题 header 底边还会向下延伸一条 2rem 装饰带，这里留出同等高度 */
+	padding-top: 2rem;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+/* 主题与浏览器默认样式常给标题/段落加大号外边距，这里统一清零，间距交给组件 */
+.flowlens h2,
+.flowlens h3,
+.flowlens h4,
+.flowlens p {
+	margin: 0;
+	font-weight: inherit;
+}
+
+/*
+ * LuCI 主题会穿透进来：Argon 用裸元素选择器写全局样式，任何 <header> 都会拿到
+ * ::after 蓝色装饰条（2rem 高，绝对定位），任何 <h2> 都会被套上白卡片
+ * （padding 1rem 1.25rem + 白底 + 圆角 + 阴影）。前者会盖住顶栏，后者会把标题
+ * 撑成一块白色内边距，因此这里按组件内部语义做防御性复位。
+ */
+.flowlens header::before,
+.flowlens header::after {
+	content: none !important;
+	display: none !important;
+}
+
+.flowlens h2 {
+	padding: 0 !important;
+	background: none !important;
+	border-radius: 0 !important;
+	box-shadow: none !important;
+	letter-spacing: normal !important;
+	line-height: 1.25 !important;
+}
+
+.flowlens :focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 3px var(--fl-accent-weak);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.flowlens *,
+	.flowlens *::before,
+	.flowlens *::after {
+		transition-duration: 0.01ms !important;
+		animation-duration: 0.01ms !important;
+	}
+}

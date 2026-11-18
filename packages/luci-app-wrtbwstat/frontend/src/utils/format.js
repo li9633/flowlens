@@ -1,4 +1,4 @@
-// 体积与占比格式化。避免引入第三方工具库（体积预算 120 KB gzip）。
+// 体积、占比与时间格式化。避免引入第三方工具库（体积预算 120 KB gzip）。
 
 const UNITS = [ 'B', 'KB', 'MB', 'GB', 'TB' ];
 
@@ -34,4 +34,9 @@ export function formatTime(ts) {
 	const d = new Date(n * 1000);
 	const pad = (v) => String(v).padStart(2, '0');
 	return pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+/** 'YYYY-MM-DD' -> 'MM-DD'（逐日图表的刻度用），异常值原样返回 */
+export function formatDayTick(date) {
+	return (typeof date === 'string' && date.length >= 10) ? date.slice(5) : String(date ?? '');
 }

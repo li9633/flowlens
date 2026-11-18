@@ -1,0 +1,69 @@
+/**
+ * 设计令牌（Design Tokens）
+ *
+ * 这是唯一允许定义 --fl-* 的地方；组件里的 scoped 样式只消费、不重定义。
+ *
+ * 取色规则：
+ *   1. 优先消费 LuCI 主题变量（--primary-color-high 等），主题说了算
+ *   2. 主题没定义时（脱离 LuCI 的 dev 预览页）用兜底色值
+ *   3. 深色模式只换兜底色，主题变量一旦存在永远优先，不会被误伤
+ */
+
+.flowlens {
+	--fl-accent: var(--primary-color-high, #2f6bff);
+	--fl-surface: var(--background-color-high, #ffffff);
+	--fl-surface-2: var(--background-color-medium, #f4f6f9);
+	--fl-track: var(--background-color-medium, #eef1f5);
+	--fl-hair: var(--border-color-low, rgba(16, 24, 40, 0.09));
+	--fl-text: var(--text-color-high, #101828);
+	--fl-muted: var(--text-color-medium, #667085);
+	--fl-faint: var(--text-color-low, #98a2b3);
+	--fl-rx: var(--success-color-high, #0f9d58);
+	--fl-tx: var(--warn-color-high, #d97706);
+	--fl-danger: var(--error-color-high, #d92d20);
+
+	/* 半透明衍生色：老浏览器用 rgba 兜底，支持 color-mix 时跟随主题主色 */
+	--fl-accent-weak: rgba(47, 107, 255, 0.10);
+	--fl-accent-line: rgba(47, 107, 255, 0.30);
+	--fl-danger-weak: rgba(217, 45, 32, 0.08);
+	--fl-danger-line: rgba(217, 45, 32, 0.28);
+	--fl-tx-weak: rgba(217, 119, 6, 0.10);
+
+	--fl-radius: 16px;
+	--fl-radius-sm: 10px;
+
+	/* 排版尺度：路由器面板信息密度高，基准 13px */
+	--fl-fs-xs: 10.5px;
+	--fl-fs-sm: 11.5px;
+	--fl-fs-base: 12.5px;
+	--fl-fs-lg: 19px;
+	--fl-fs-xl: 23px;
+
+	--fl-ease: cubic-bezier(0.32, 0.72, 0.28, 1);
+}
+
+@supports (background: color-mix(in srgb, red 10%, transparent)) {
+	.flowlens {
+		--fl-accent-weak: color-mix(in srgb, var(--fl-accent) 11%, transparent);
+		--fl-accent-line: color-mix(in srgb, var(--fl-accent) 34%, transparent);
+		--fl-danger-weak: color-mix(in srgb, var(--fl-danger) 9%, transparent);
+		--fl-danger-line: color-mix(in srgb, var(--fl-danger) 30%, transparent);
+		--fl-tx-weak: color-mix(in srgb, var(--fl-tx) 12%, transparent);
+	}
+}
+
+@media (prefers-color-scheme: dark) {
+	.flowlens {
+		--fl-accent: var(--primary-color-high, #6f9bff);
+		--fl-surface: var(--background-color-high, #16181d);
+		--fl-surface-2: var(--background-color-medium, #1f232b);
+		--fl-track: var(--background-color-medium, #262b34);
+		--fl-hair: var(--border-color-low, rgba(255, 255, 255, 0.09));
+		--fl-text: var(--text-color-high, #e7eaef);
+		--fl-muted: var(--text-color-medium, #9aa4b2);
+		--fl-faint: var(--text-color-low, #7b8494);
+		--fl-rx: var(--success-color-high, #3ecf8e);
+		--fl-tx: var(--warn-color-high, #f0b429);
+		--fl-danger: var(--error-color-high, #ff6b5e);
+	}
+}
