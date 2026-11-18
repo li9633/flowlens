@@ -17,7 +17,21 @@
 import { popen, readfile, writefile, mkdir, unlink, stat, access, glob } from 'fs';
 import { cursor } from 'uci';
 
-const NLBW_BIN = '/usr/bin/nlbw';
+// nlbw 的实际安装路径随 OpenWrt 版本/打包而异：24.10 在 /usr/sbin，部分分支在 /usr/bin。
+// 启动时按候选列表探测一次，避免写死单一路径导致"nlbw 缺失"的假告警。
+const NLBW_CANDIDATES = [ '/usr/sbin/nlbw', '/usr/bin/nlbw', '/sbin/nlbw' ];
+let nlbw_path = null;
+
+function nlbw_bin() {
+	if (nlbw_path != null)
+		return nlbw_path;
+
+	for (let p in NLBW_CANDIDATES)
+		if (access(p)) return (nlbw_path = p);
+
+	nlbw_path = '';
+	return '';
+}
 const CACHE_DIR = '/tmp/wrtbwstat-cache';
 const UNKNOWN_MAC = '00:00:00:00:00:00';
 const UNKNOWN_NAME = '未知设备';
@@ -247,10 +261,11 @@ function nlbw_query(day, group) {
 	if (cached != null)
 		return { rows: cached, error: null, cached: true };
 
-	if (!access(NLBW_BIN))
-		return { rows: [], error: NLBW_BIN + ' not found (nlbwmon missing?)' };
+	let bin = nlbw_bin();
+	if (!bin)
+		return { rows: [], error: 'nlbw not found (nlbwmon missing?)' };
 
-	let cmd = sprintf('%s -c json -n -g %s -o -rx_bytes', NLBW_BIN, group);
+	let cmd = sprintf('%s -c json -n -g %s -o -rx_bytes', bin, group);
 
 	// 今天读守护进程的活跃数据库；历史日期读归档库
 	if (day != today())
@@ -470,7 +485,8 @@ function collector_info() {
 		commit_interval: uci_get('nlbwmon', '@nlbwmon[0]', 'commit_interval'),
 		compress: (uci_get('nlbwmon', '@nlbwmon[0]', 'database_compress') ?? '0') == '1',
 		local_networks: networks,
-		binary_present: !!access(NLBW_BIN)
+		binary_present: !!nlbw_bin(),
+		binary_path: nlbw_bin()
 	};
 }
 
@@ -573,7 +589,7 @@ methods.get_summary = {
 			days_with_data: withData,
 			ranges,
 			warnings: collect_warnings(),
-			errors: access(NLBW_BIN) ? [] : [ 'nlbw 不可用，全部数据为空。' ]
+			errors: nlbw_bin() ? [] : [ 'nlbw 不可用，全部数据为空。' ]
 		};
 	}
 };
@@ -656,8 +672,15 @@ methods.get_device = {
 					name = r.layer7;
 					protoField = protoField ?? 'layer7';
 				}
+				else if (r.proto != null) {
+					// 实测：nlbw 的 layer7 多数为 null（协议库只映射少量端口），
+					// 此时退回协议名；分组里带了端口就带上端口，信息量更大。
+					let port = num(r.port);
+					name = (port > 0) ? sprintf('%s/%d', r.proto, port) : sprintf('%s', r.proto);
+					protoField = protoField ?? 'proto';
+				}
 				else {
-					name = (r.proto != null) ? sprintf('proto %s', r.proto) : 'other';
+					name = 'other';
 					protoField = protoField ?? 'proto';
 				}
 
@@ -676,6 +699,8 @@ methods.get_device = {
 		for (let name in protos) {
 			let p = protos[name];
 			p.total_bytes = p.rx_bytes + p.tx_bytes;
+			if (p.total_bytes <= 0)
+				continue;    // 跳过只有零字节连接的协议，避免占位条目
 			ptotal += p.total_bytes;
 			push(protoList, p);
 		}

@@ -7,7 +7,8 @@ FlowLens 是一个面向 OpenWrt / iStoreOS 的按设备流量统计插件项目
 - 设计：v2 定稿（Vue 3 + Vite 前端、ucode 后端、nlbwmon 采集）。打包双轨：apk 主推，ipk 维护至 24.10 EOL。
 - 后端：M1 已实现——六个 ubus 方法全部落地，逐日读取 nlbw 账期并聚合，带历史账期缓存与采集告警。已在 OpenWrt rootfs 容器内用 mock nlbw 跑通 144 条断言。
 - 前端：M2a 已完成——`app.js` / `app.css` 已构建入库，`npm run verify` 在 jsdom 中实测挂载通过，gzip 合计 29 KB。
-- 未完成：真机确认 `nlbw` 实际输出列名（容器用的是 mock）；LuCI 联调（M2b）；`luci-app` 出包需完整 buildroot（M3）。
+- 真机：已在 iStoreOS 24.10.8（rockchip/armv8，opkg）上部署并跑通后端，`nlbw` 真实列名已确认。
+- 未完成：浏览器内页面渲染确认；`luci-app` 出包需完整 buildroot（M3）。
 
 ## 目录结构
 
@@ -229,7 +230,28 @@ mkdir fl && tar xzf fl.tgz -C fl && cd fl && sh install-dev.sh
 
 **注意**：OpenWrt 基础系统**没有 `install` 命令**（busybox 未编译该 applet），脚本里必须用 `mkdir -p` + `cp` + `chmod`，不要用 `install -m`。
 
-### 真机冒烟测试（尚未执行）
+### 真机实测结果（iStoreOS 24.10.8 / rockchip armv8）
+
+已通过 SSH 在目标路由器上部署 `scripts/dev-deploy/` 并验证：
+
+| 项 | 结果 |
+| --- | --- |
+| 包管理器 / ucode | opkg / ucode 2025.07.18，`rpcd-mod-ucode` 与 `ucode-mod-{fs,uci,ubus}` 齐全 |
+| `nlbw` 位置 | **`/usr/sbin/nlbw`**（不是 `/usr/bin`）——已改为启动时按候选列表探测，写死路径会误报"nlbw 缺失" |
+| `-g mac` 列名 | `["mac","conns","rx_bytes","rx_pkts","tx_bytes","tx_pkts"]`，与解析器的按列名映射一致 |
+| `-g mac,layer7` | 可分组，列含 `proto/port/layer7`；`layer7` 部分为 `null`（协议库只映射少量端口），部分为 `HTTPS` 等 |
+| 默认数据库目录 | `/var/lib/nlbwmon`，而 `/var` 是 tmpfs 的软链 → 重启丢历史；已改为 `/dockers-data/nlbwmon`（fstab 挂载，40 G 可用） |
+| `nlbw -c commit` | 生成 `20261118.db.gz`（`database_compress=1` 生效），`-t 2026-11-18` 可读 |
+| 历史归档校验 | 改名的副本会被拒（`No data available`），即归档按内部日期校验；后端把该错误当日 0 处理，不报错 |
+| 实测耗时 | `get_summary` 冷 0.58–0.66 s / 热 0.62 s；`get_devices last7` 0.06 s |
+| 静态资源 | `app.js` 73515 B、`app.css` 2774 B、`overview.js` 3206 B 均返回 200 |
+| 设备名 | DHCP 租约解析生效（`ubuntu-server`），`share` 计算正确 |
+
+据此修了三处代码：`nlbw` 路径改为运行时探测、协议名在 `layer7` 为 null 时退回 `proto/port`、过滤零字节协议条目。
+
+> 仍需人工确认：浏览器打开 LuCI → 网络 → FlowLens，看页面是否正常渲染（后端与静态资源已通，剩下是 Vue 挂载与轮询）。
+
+### 真机冒烟测试（备查）
 
 **前置条件：路由器必须已安装 `nlbwmon`**（`nlbw` 命令来自该包）。装包时 `wrtbwstat` 的 `DEPENDS:=+nlbwmon` 会自动带入，但手工验证阶段需先自己装：
 
@@ -278,7 +300,8 @@ ubus call luci.wrtbwstat get_device '{"mac":"aa:bb:cc:dd:ee:ff","range":"last7"}
 - [x] M1：`enumerate_days` / `read_day`（`nlbw -c json -n -t`）/ `aggregate` / `resolve_hostname` / `day_total` / 缓存。
 - [x] M1：`set_settings` 校验（拒绝 tmpfs 目录、保留期、刷新间隔白名单）与 `reset_database`。
 - [x] M1-verify：OpenWrt rootfs 容器内 144 条断言全通过（含 layer7 回退与 uci-defaults），修掉 4 个 ucode 语义问题。
-- [ ] M1-verify-device：真机确认 `nlbw -c json` 实际列名与 `-g mac,layer7` 是否可分组。
+- [x] M1-verify-device：iStoreOS 24.10.8 真机确认列名、`-g mac,layer7` 可分组、`nlbw` 在 `/usr/sbin`。
+- [ ] M2b-verify：浏览器确认 LuCI 页面渲染与轮询。
 - [x] M2a：依赖安装与构建跑通，`app.js` / `app.css` / `package-lock.json` 入库；`npm run verify` 在 jsdom 中实测挂载通过。
 - [ ] M2b：25.12 LuCI 中联调薄壳 view，验证会话、ACL、poll 生命周期。
 - [x] M3-ipk：24.10.5 SDK 产出 `wrtbwstat` 的 ipk 并核验 control / conffiles / 文件权限。
