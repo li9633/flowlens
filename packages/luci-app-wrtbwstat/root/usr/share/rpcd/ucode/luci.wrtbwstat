@@ -483,7 +483,16 @@ function sort_devices(list, sortBy) {
 	        : 'total_bytes';
 
 	sort(list, function(a, b) {
-		if (sortBy == 'hostname') return cmp_str(lc(a.hostname || a.mac), lc(b.hostname || b.mac));
+		// 按名称排序时，来源不明的设备（MAC 解析失败）统一排到最后
+		if (sortBy == 'hostname') {
+			let ua = a.unknown_source ? 1 : 0;
+			let ub = b.unknown_source ? 1 : 0;
+
+			if (ua != ub)
+				return ua - ub;
+
+			return cmp_str(lc(a.hostname || a.mac), lc(b.hostname || b.mac));
+		}
 		if (sortBy == 'mac') return cmp_str(a.mac, b.mac);
 		return b[key] - a[key];    // 数值降序：比较器必须返回数值而非布尔
 	});
@@ -714,7 +723,10 @@ methods.get_device = {
 					// 实测：nlbw 的 layer7 多数为 null（协议库只映射少量端口），
 					// 此时退回协议名；分组里带了端口就带上端口，信息量更大。
 					let port = num(r.port);
-					name = (port > 0) ? sprintf('%s/%d', r.proto, port) : sprintf('%s', r.proto);
+					// 字符串协议名（IP/TCP/UDP）直接用；数字协议号保留 proto N 的形式，
+					// 否则界面上只剩一个 "6" 无法辨认
+					let pname = (type(r.proto) == 'string') ? r.proto : sprintf('proto %s', r.proto);
+					name = (port > 0) ? sprintf('%s/%d', pname, port) : pname;
 					protoField = protoField ?? 'proto';
 				}
 				else {

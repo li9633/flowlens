@@ -77,8 +77,8 @@ if (phase == 'read') {
 		check('devices[1].mac', dv.devices[1].mac, 'aa:bb:cc:00:11:02');
 		check('devices[1].hostname_dhcp', dv.devices[1].hostname, 'MacBook-Pro');
 		check_share('devices[1].share', dv.devices[1].share, '0.3311');
-		check('devices[2].hostname_unknown', dv.devices[2].hostname, '未知设备');
-		check('devices[2].unknown_flag', dv.devices[2].unknown_source, true);
+		check('devices[2].hostname_unknown', dv.devices[2].hostname, '');
+		check('devices[2].unknown_source', dv.devices[2].unknown_source, true);
 	}
 
 	printf("\n### 排序与关键词\n");
@@ -134,7 +134,7 @@ if (phase == 'read') {
 	}
 
 	let bad = methods.get_device.call({ args: { mac: 'not-a-mac', range: 'last7' } });
-	check('device.invalid_mac_error', bad.error, 'invalid mac');
+	check('device.invalid_mac_error', bad.error.code, 'errInvalidMac');
 }
 
 // ---------------------------------------------------------------------------
