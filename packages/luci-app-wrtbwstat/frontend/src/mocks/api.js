@@ -51,7 +51,6 @@ const I18N = {
 	resetNeedConfirm: '请先勾选确认框。',
 	resetDone: '数据库已清空。',
 	capacityTitle: '容量保护',
-	capacityRule: '实测上限：90 天 × 200 台/天（18000 设备日）为 100%。',
 	capacityAction: '使用率超过 80% 时，自动删除最旧的历史归档，把负载压回阈值以内。',
 	capacityEffect: '被清理的日期仍会出现在 90 天窗口中，但流量显示为 0。',
 	capacityUsage: '当前使用率',

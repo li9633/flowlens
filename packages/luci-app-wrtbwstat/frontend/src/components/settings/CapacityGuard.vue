@@ -55,7 +55,6 @@ const cleanup = computed(function() {
 	<div class="fl-capacity">
 		<h4 class="fl-capacity-title">{{ t('capacityTitle') }}</h4>
 
-		<p class="fl-capacity-text">{{ t('capacityRule') }}</p>
 		<p class="fl-capacity-text">{{ t('capacityAction') }}</p>
 		<p class="fl-capacity-text fl-capacity-warn">{{ t('capacityEffect') }}</p>
 

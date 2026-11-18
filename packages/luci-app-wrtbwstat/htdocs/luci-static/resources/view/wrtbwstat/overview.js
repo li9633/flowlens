@@ -61,7 +61,6 @@ const ZH = {
 	'Please tick the confirmation box first.': '请先勾选确认框。',
 	'Database cleared.': '数据库已清空。',
 	'Capacity protection': '容量保护',
-	'Validated limit: 90 days x 200 devices/day (18,000 device-days) is 100%.': '实测上限：90 天 × 200 台/天（18000 设备日）为 100%。',
 	'When usage exceeds 80%, the oldest history archives are deleted automatically until the load falls back under the threshold.': '使用率超过 80% 时，自动删除最旧的历史归档，把负载压回阈值以内。',
 	'Cleaned-up days still appear in the 90-day window but show zero traffic.': '被清理的日期仍会出现在 90 天窗口中，但流量显示为 0。',
 	'Current load': '当前使用率',
@@ -235,7 +234,6 @@ return view.extend({
 
 				// 容量保护
 				capacityTitle: T('Capacity protection'),
-				capacityRule: T('Validated limit: 90 days x 200 devices/day (18,000 device-days) is 100%.'),
 				capacityAction: T('When usage exceeds 80%, the oldest history archives are deleted automatically until the load falls back under the threshold.'),
 				capacityEffect: T('Cleaned-up days still appear in the 90-day window but show zero traffic.'),
 				capacityUsage: T('Current load'),
