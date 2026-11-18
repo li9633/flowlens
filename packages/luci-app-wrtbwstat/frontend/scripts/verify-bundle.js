@@ -94,6 +94,7 @@ const api = {
 	}),
 	setSettings: async () => ({ success: true }),
 	resetDatabase: async (confirm) => ({ success: confirm === true, removed: 2 }),
+	fixFullcone: async (confirm) => ({ success: confirm === true, reboot_required: true, changed: [] }),
 	addPoll: () => {},
 	i18n: {
 		title: 'Traffic usage', today: 'Today', yesterday: 'Yesterday',
@@ -102,6 +103,14 @@ const api = {
 		share: 'Share', search: 'Search device', empty: 'No traffic data yet.',
 		loading: 'Loading…', error: 'Failed to load traffic data.',
 		warnTmpfs: 'Database directory is on tmpfs ({dir}), history will be lost after reboot.',
+		warnFullcone: 'A fullcone NAT module was detected, conntrack events may not reach nlbwmon.',
+		warnFullconeAction: 'The fix turns off fullcone NAT (affects NAT type for P2P and online games) and never reboots the router; a manual reboot is required.',
+		warnFullconeReboot: 'fullcone is disabled; conntrack events resume after the router reboots.',
+		warnFullconeRebootHint: 'Reboot the router manually (System → Reboot).',
+		backupHint: 'Original files are backed up in {dir}; run restore.sh there to undo the change.',
+		fixFullcone: 'Fix automatically',
+		fixingFullcone: 'Fixing…',
+		fixFullconeFailed: 'Fix failed.',
 		unknownDevice: 'Unknown device',
 		detail: 'Device details', daily: 'Daily usage', protocols: 'Protocol distribution',
 		close: 'Close', back: 'Back', settings: 'Settings', save: 'Save', saved: 'Saved',
@@ -282,6 +291,62 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 	})) {
 		console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
 		if (!pass) ok = false;
+	}
+
+	// fullcone 告警必须给出可执行动作，而不是只留一句"可能有问题"
+	const elFullcone = window.document.createElement('div');
+	window.document.body.appendChild(elFullcone);
+
+	let fixConfirm = null;
+
+	const backupDir = '/etc/wrtbwstat/backup/fullcone-20261118-223000';
+
+	const fullconeApi = Object.assign({}, api, {
+		getSummary: async () => ({
+			warnings: [
+				(fixConfirm === true)
+					? { code: 'warnFullconeReboot', dir: backupDir }
+					: { code: 'warnFullcone' }
+			],
+			ranges: [
+				{ range: 'today', days: 1, rx_bytes: 0, tx_bytes: 0, total_bytes: 0, series: [] }
+			]
+		}),
+		fixFullcone: async (confirm) => {
+			fixConfirm = confirm;
+			return { success: true, reboot_required: true, changed: [ 'firewall.fullcone' ], backup_dir: backupDir };
+		}
+	});
+
+	window.WrtbwstatApp.mount(elFullcone, fullconeApi);
+	await wait(200);
+
+	const fixBtn = Array.from(elFullcone.querySelectorAll('button'))
+		.find((b) => b.textContent.trim() === 'Fix automatically');
+
+	for (const [ name, pass ] of Object.entries({
+		'fullcone 告警渲染修复按钮': !!fixBtn,
+		'fullcone 告警说明副作用': elFullcone.innerHTML.includes('affects NAT type for P2P')
+	})) {
+		console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
+		if (!pass) ok = false;
+	}
+
+	if (fixBtn) {
+		fixBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+		await wait(200);
+
+		for (const [ name, pass ] of Object.entries({
+			'修复携带 confirm=true': fixConfirm === true,
+			'修复后提示手动重启': elFullcone.innerHTML.includes('manually'),
+			'修复后展示备份路径': elFullcone.innerHTML.includes(backupDir),
+			'修复后不提供重启按钮/链接': !elFullcone.querySelector('a[href*="reboot"]'),
+			'修复后不再显示修复按钮': !Array.from(elFullcone.querySelectorAll('button'))
+				.some((b) => b.textContent.trim() === 'Fix automatically')
+		})) {
+			console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
+			if (!pass) ok = false;
+		}
 	}
 
 	// 并发回归：先点「昨天」（慢响应）再点「今天」（快响应），

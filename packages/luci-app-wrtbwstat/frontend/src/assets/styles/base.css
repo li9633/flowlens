@@ -52,6 +52,15 @@
 	box-shadow: 0 0 0 3px var(--fl-accent-weak);
 }
 
+/*
+ * 主题的裸元素样式还会砍到按钮：Argon 对 button 写了 height:2.5rem /
+ * line-height:1.5rem，组件里的卡片是「标签 + 总量 + 上下行 + 趋势」四行内容，
+ * 被固定成 40px 后又因 overflow:hidden 直接被裁成一条。高度一律交回内容决定。
+ */
+.flowlens button {
+	height: auto;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.flowlens *,
 	.flowlens *::before,

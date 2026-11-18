@@ -22,11 +22,27 @@ echo "== 环境 =="
 ucode -e 'let d = localtime(); printf("ucode ok, today=%04d-%02d-%02d\n", d.year, d.mon, d.mday)'
 
 echo "== 安装夹具 =="
-mkdir -p /etc/config /usr/bin /srv/nlbw
+mkdir -p /etc/config /usr/bin /srv/nlbw/wrtbwstat
 cp "$WORK/tests/backend/fixtures/nlbwmon" /etc/config/nlbwmon
 cp "$WORK/tests/backend/fixtures/wrtbwstat" /etc/config/wrtbwstat
 cp "$WORK/tests/backend/mock-nlbw" /usr/bin/nlbw
 chmod +x /usr/bin/nlbw
+
+# fullcone 夹具：功能开关 + 开机加载项 + 模块文件，供 fix_fullcone 改名断言使用。
+# 容器里没有 /sys/module/nft_fullcone，因此 loaded 恒为 false（模拟"尚未加载"）。
+mkdir -p /etc/config /etc/modules.d /lib/modules/fl-test
+cat > /etc/config/firewall <<'EOF'
+config defaults
+	option input 'ACCEPT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+	option fullcone '1'
+	option fullcone6 '1'
+EOF
+printf 'nft-fullcone\n' > /etc/modules.d/nft-fullcone
+printf 'fake-ko-content' > /lib/modules/fl-test/nft_fullcone.ko
+rm -f /etc/modules.d/nft-fullcone.disabled /lib/modules/fl-test/nft_fullcone.ko.disabled
+rm -rf /etc/wrtbwstat/backup /etc/wrtbwstat/fullcone-backup
 
 # 01 只有别名；02 只有 DHCP 租约，用于分别验证两级名字回退
 printf '%s\n' \
@@ -35,8 +51,11 @@ printf '%s\n' \
 	> /tmp/dhcp.leases
 
 reset_dbfiles() {
-	printf 'fake-db-content-0123456789' > /srv/nlbw/nlbwmon.db
-	printf 'fake-db-content-0123456789' > /srv/nlbw/nlbwmon.db.1.gz
+	# 现行 nlbwmon 按账期命名库文件（-Z 压缩为 .db.gz），老版本才叫 nlbwmon.db；
+	# 三种都要被 reset_database 清掉
+	printf 'fake-db-content-0123456789' > /srv/nlbw/wrtbwstat/20261101.db.gz
+	printf 'fake-db-content-0123456789' > /srv/nlbw/wrtbwstat/20261118.db
+	printf 'fake-db-content-0123456789' > /srv/nlbw/wrtbwstat/nlbwmon.db
 }
 reset_dbfiles
 

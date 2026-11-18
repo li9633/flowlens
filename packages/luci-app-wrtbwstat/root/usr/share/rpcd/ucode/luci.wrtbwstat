@@ -14,7 +14,7 @@
 //   4. 设备维度以 MAC 归并，同 MAC 的多个 IPv4/IPv6 地址自然合并。
 'use strict';
 
-import { popen, readfile, writefile, mkdir, unlink, stat, access, glob } from 'fs';
+import { popen, readfile, writefile, mkdir, unlink, stat, access, glob, rename } from 'fs';
 import { cursor } from 'uci';
 
 // nlbw 的实际安装路径随 OpenWrt 版本/打包而异：24.10 在 /usr/sbin，部分分支在 /usr/bin。
@@ -43,6 +43,36 @@ const REFRESH_CHOICES = [ 0, 10, 30, 60 ];
 
 const DEFAULT_RETENTION_DAYS = 95;
 const DEFAULT_REFRESH_INTERVAL = 30;
+
+/*
+ * 存储布局：settings.storage_dir 只是父目录，nlbwmon 的库落在它的 wrtbwstat/
+ * 子目录里。这样目录里只有自己写的库文件，清空时按目录整体处理也不会碰到
+ * 用户的其他数据（storage_dir 可以放心指向 /mnt/usb 这类盘根）。
+ */
+const DATA_SUBDIR = 'wrtbwstat';
+const DEFAULT_STORAGE_DIR = '/mnt/usb';
+
+function data_dir_of(base) {
+	base = trim(base ?? '');
+
+	while (length(base) > 1 && substr(base, length(base) - 1) == '/')
+		base = substr(base, 0, length(base) - 1);
+
+	return ((length(base) > 1) ? base : '') + '/' + DATA_SUBDIR;
+}
+
+// 递归建目录：ucode 的 mkdir() 只建一级，<base>/a/b 这种路径会因父目录缺失失败
+function mkdir_p(path) {
+	if (!path || path == '/' || access(path))
+		return;
+
+	let slash = rindex(path, '/');
+
+	if (slash > 0)
+		mkdir_p(substr(path, 0, slash));
+
+	mkdir(path);
+}
 
 // 容量保护：以 mock 实测的稳定上限为 100% —— 90 天 × 200 台/天 = 18000 设备日。
 // 设备日（每天出现的设备数逐日累加）才是聚合与渲染成本的真实放大因子，
@@ -106,6 +136,51 @@ function run(cmd) {
 	catch (e) {
 		return { rc: -1, out: '', error: '' + e };
 	}
+}
+
+function shq(s) {
+	return "'" + replace('' + s, "'", "'\\''") + "'";
+}
+
+// 换目录时把旧库文件搬进新目录；不覆盖同名文件，返回搬移个数。
+// 必须定义在 run() 之后：ucode 的函数声明不是提升的，前面的函数引用 run 会报
+// "access to undeclared variable run"。
+function move_db_files(from, to) {
+	if (type(from) != 'string' || length(from) < 2 || from == to)
+		return 0;
+
+	mkdir_p(to);
+
+	let moved = 0;
+
+	for (let pattern in [ from + '/*.db', from + '/*.db.gz', from + '/nlbwmon.db*' ]) {
+		for (let file in glob(pattern)) {
+			let st = stat(file);
+
+			if (st?.type != 'file')
+				continue;
+
+			let slash = rindex(file, '/');
+			let dst = to + '/' + (slash >= 0 ? substr(file, slash + 1) : file);
+
+			if (access(dst))
+				continue;
+
+			try {
+				if (rename(file, dst)) {
+					moved++;
+					continue;
+				}
+			}
+			catch (e) {}
+
+			// rename 不能跨文件系统（闪存 -> U 盘），回退到 mv
+			if (run(sprintf('mv %s %s', shq(file), shq(dst))).rc == 0 && access(dst))
+				moved++;
+		}
+	}
+
+	return moved;
 }
 
 function is_digits(s) {
@@ -715,6 +790,84 @@ function uci_get(config, section, option) {
 	}
 }
 
+/*
+ * fullcone NAT 与 nlbwmon 在同一台设备上互斥：
+ *   - fw4 启动时用 `nft -c` 无条件探测 fullcone 表达式（与 UCI 里 fullcone 是 0 还是 1 无关），
+ *     解析表达式本身会触发 request_module，把 nft_fullcone 拉进内核；
+ *   - 模块一旦加载，ctnetlink 的 conntrack 事件就不再投递，nlbwmon 恒为 0；
+ *   - rmmod 之后事件不会恢复，必须重启，重启后 fw4 又会探测加载。
+ * 因此唯一有效的处置是让探测失败：关掉功能开关，并让 .ko 在文件系统里消失（改名）。
+ */
+
+function fullcone_files() {
+	let active = [], disabled = [];
+
+	for (let f in glob('/lib/modules/*/nft_fullcone.ko*')) {
+		if (substr(f, length(f) - 9) == '.disabled')
+			push(disabled, f);
+		else
+			push(active, f);
+	}
+
+	return { active, disabled };
+}
+
+function fullcone_state() {
+	let files = fullcone_files();
+
+	return {
+		loaded: length(glob('/sys/module/*fullcone*')) > 0,
+		modules_d: access('/etc/modules.d/nft-fullcone'),
+		active: files.active,
+		disabled: files.disabled
+	};
+}
+
+/*
+ * 修复前先把要改的文件原样备份，用户随时可以跑 restore.sh 回退。
+ * 备份落在插件独占目录里，不覆盖上一份：多次执行各留一份，最近一次的路径
+ * 记在 fullcone-backup，供页面在"待重启"状态下展示。
+ */
+const BACKUP_ROOT = '/etc/wrtbwstat/backup';
+const BACKUP_MARKER = '/etc/wrtbwstat/fullcone-backup';
+
+function backup_stamp() {
+	let l = localtime();
+	return sprintf('%04d%02d%02d-%02d%02d%02d', l.year, l.mon, l.mday, l.hour, l.min, l.sec);
+}
+
+function copy_file(src, dst) {
+	if (run(sprintf('cp -a %s %s', shq(src), shq(dst))).rc != 0 || !access(dst))
+		return false;
+	return true;
+}
+
+/** 最近一次修复的备份目录；未备份或已被删除时返回 null */
+function fullcone_backup_dir() {
+	let d = trim(readfile(BACKUP_MARKER) ?? '');
+	return (length(d) > 1 && access(d)) ? d : null;
+}
+
+/** 落盘改名；已改过返回 skipped，失败返回 failed（squashfs 只读、空间不足等） */
+function disable_file(path) {
+	let dst = path + '.disabled';
+
+	if (access(dst))
+		return 'skipped';
+
+	try {
+		if (rename(path, dst))
+			return 'renamed';
+	}
+	catch (e) {}
+
+	// overlayfs 上的 rename 理论上走写时复制，保险起见保留 mv 回退
+	if (run(sprintf('mv %s %s', shq(path), shq(dst))).rc == 0 && access(dst))
+		return 'renamed';
+
+	return 'failed';
+}
+
 function collector_info() {
 	let networks = uci_get('nlbwmon', '@nlbwmon[0]', 'local_network');
 
@@ -894,8 +1047,21 @@ function collect_warnings() {
 	if (acct != '1')
 		push(warnings, { code: 'warnAcctOff' });
 
-	if (length(glob('/sys/module/*fullcone*')) > 0)
-		push(warnings, { code: 'warnFullcone' });
+	// 模块已禁用但还没重启时，事件仍然是断的——文案要区分"去修复"和"去重启"
+	let fc = fullcone_state();
+
+	if (fc.loaded) {
+		let repaired = (length(fc.active) == 0 && length(fc.disabled) > 0);
+		let warning = { code: repaired ? 'warnFullconeReboot' : 'warnFullcone' };
+
+		// 已修复的话把备份位置一并带出去，用户重启前还能看到怎么回退
+		if (repaired) {
+			let dir = fullcone_backup_dir();
+			if (dir) warning.dir = dir;
+		}
+
+		push(warnings, warning);
+	}
 
 	if (length(info.local_networks) == 0)
 		push(warnings, { code: 'warnNoLocalNet' });
@@ -904,8 +1070,11 @@ function collect_warnings() {
 }
 
 function read_settings() {
+	let storage_dir = uci_get('wrtbwstat', 'settings', 'storage_dir') ?? DEFAULT_STORAGE_DIR;
+
 	return {
-		storage_dir: uci_get('wrtbwstat', 'settings', 'storage_dir') ?? '/mnt/usb/nlbwmon',
+		storage_dir,
+		data_dir: data_dir_of(storage_dir),
 		retention_days: +(uci_get('wrtbwstat', 'settings', 'retention_days') ?? DEFAULT_RETENTION_DAYS),
 		commit_interval: uci_get('wrtbwstat', 'settings', 'commit_interval') ?? '6h',
 		compress: (uci_get('wrtbwstat', 'settings', 'compress') ?? '1') == '1',
@@ -1153,6 +1322,7 @@ methods.get_settings = {
 
 		return {
 			storage_dir: settings.storage_dir,
+			data_dir: settings.data_dir,
 			retention_days: settings.retention_days,
 			commit_interval: settings.commit_interval,
 			compress: settings.compress,
@@ -1263,8 +1433,9 @@ methods.set_settings = {
 				for (let kv in changed) {
 					switch (kv[0]) {
 					case 'storage_dir':
-						ctx.set('nlbwmon', '@nlbwmon[0]', 'database_directory', kv[1]);
-						if (old_dir != kv[1])
+						// nlbwmon 只写 storage_dir 下的 wrtbwstat/ 子目录
+						ctx.set('nlbwmon', '@nlbwmon[0]', 'database_directory', data_dir_of(kv[1]));
+						if (old_dir != data_dir_of(kv[1]))
 							restart = true;
 						break;
 					case 'retention_days':
@@ -1283,7 +1454,15 @@ methods.set_settings = {
 			}
 
 			if (restart) {
-				run('/etc/init.d/nlbwmon restart >/dev/null 2>&1');
+				// 换目录时把旧库搬过去，用户不会因为改路径丢历史
+				let new_dir = uci_get('nlbwmon', '@nlbwmon[0]', 'database_directory');
+
+				run('/etc/init.d/nlbwmon stop >/dev/null 2>&1');
+				try {
+					move_db_files(old_dir, new_dir);
+				}
+				catch (e) {}
+				run('/etc/init.d/nlbwmon start >/dev/null 2>&1');
 				cache_clear();
 			}
 
@@ -1306,20 +1485,35 @@ methods.reset_database = {
 		if (type(dir) != 'string' || length(dir) < 5 || dir == '/')
 			return { success: false, message: { code: 'errDirUnavailable' } };
 
+		// 只清插件自己的数据目录（<storage_dir>/wrtbwstat），不碰别人的文件
+		let slash = rindex(dir, '/');
+
+		if ((slash >= 0 ? substr(dir, slash + 1) : dir) != DATA_SUBDIR)
+			return { success: false, message: { code: 'errDirUnavailable' } };
+
 		run('/etc/init.d/nlbwmon stop >/dev/null 2>&1');
 
 		let removed = 0, failed = 0, freed = 0;
 
-		for (let file in glob(dir + '/nlbwmon.db*')) {
-			let st = stat(file);
-			try {
-				if (unlink(file)) {
-					removed++;
-					freed += num(st?.size);
+		/*
+		 * nlbwmon 的库文件是按账期命名的 <YYYYMMDD>.db[.gz]（-Z 时压缩），
+		 * 老版本才叫 nlbwmon.db；只匹配 nlbwmon.db* 会一个都删不到，
+		 * 于是“清空成功但数据还在”。这里三种后缀都收。
+		 */
+		for (let pattern in [ dir + '/*.db', dir + '/*.db.gz', dir + '/nlbwmon.db*' ]) {
+			for (let file in glob(pattern)) {
+				let st = stat(file);
+				if (st?.type != 'file')
+					continue;
+				try {
+					if (unlink(file)) {
+						removed++;
+						freed += num(st?.size);
+					}
 				}
-			}
-			catch (e) {
-				failed++;
+				catch (e) {
+					failed++;
+				}
 			}
 		}
 
@@ -1332,6 +1526,146 @@ methods.reset_database = {
 			removed,
 			failed,
 			freed_bytes: freed
+		};
+	}
+};
+
+/*
+ * 一键处置 fullcone 冲突。
+ *
+ * 两条底线：
+ *   1. 不重启——动用户正在使用的路由器是侵扰性操作，页面只提示手动重启；
+ *   2. 改文件前先备份到 /etc/wrtbwstat/backup/<时间戳>/ 并生成 restore.sh，
+ *      备份不完整就整体放弃，不留下"改了一半、又退不回去"的状态。
+ */
+methods.fix_fullcone = {
+	args: { confirm: false },
+	call: function(request) {
+		if (request.args?.confirm !== true)
+			return { success: false, message: { code: 'errFixConfirm' } };
+
+		let state = fullcone_state();
+		let failed = [];
+
+		// 没有可改的 .ko 却已经加载：模块编译进了内核，插件无能为力
+		if (state.loaded && length(state.active) == 0 && length(state.disabled) == 0)
+			return { success: false, message: { code: 'errFullconeBuiltin' }, changed: [] };
+
+		// 先算清楚确实要改什么：已经关过的项不再重复写，也就不用多留一份备份
+		let fw_needed = false;
+
+		try {
+			let ctx = cursor();
+			ctx.load('firewall');
+
+			if (ctx.get('firewall', '@defaults[0]') != null) {
+				let v = ctx.get('firewall', '@defaults[0]', 'fullcone');
+				let v6 = ctx.get('firewall', '@defaults[0]', 'fullcone6');
+
+				fw_needed = (v != null && '' + v != '0') || (v6 != null && '' + v6 != '0');
+			}
+		}
+		catch (e) {}
+
+		let targets = [];
+
+		if (state.modules_d)
+			push(targets, '/etc/modules.d/nft-fullcone');
+
+		for (let f in state.active)
+			push(targets, f);
+
+		if (!fw_needed && length(targets) == 0)
+			return { success: true, changed: [], failed: [], reboot_required: state.loaded, backup_dir: null };
+
+		// ---- 备份 ----
+		// 同一秒内重复执行（连点）时不能覆盖上一份备份，加序号区分
+		let stamp = backup_stamp();
+		let dir = sprintf('%s/%s', BACKUP_ROOT, stamp);
+
+		for (let i = 1; access(dir); i++)
+			dir = sprintf('%s/%s-%d', BACKUP_ROOT, stamp, i);
+
+		mkdir_p(dir);
+
+		let backups = [];
+
+		if (fw_needed) {
+			if (copy_file('/etc/config/firewall', dir + '/firewall'))
+				push(backups, [ '/etc/config/firewall', dir + '/firewall' ]);
+			else
+				push(failed, '/etc/config/firewall');
+		}
+
+		for (let src in targets) {
+			let slash = rindex(src, '/');
+			let dst = dir + '/' + (slash >= 0 ? substr(src, slash + 1) : src);
+
+			if (copy_file(src, dst))
+				push(backups, [ src, dst ]);
+			else
+				push(failed, src);
+		}
+
+		if (length(failed) > 0)
+			return { success: false, message: { code: 'errBackupFailed', dir }, changed: [], failed };
+
+		let script = '#!/bin/sh\n';
+		script += '# FlowLens: 恢复 fullcone 修复前的文件；执行后请手动重启路由器。\n';
+		script += 'set -e\n';
+
+		for (let pair in backups) {
+			script += sprintf('cp -a %s %s\n', shq(pair[1]), shq(pair[0]));
+			script += sprintf('rm -f %s\n', shq(pair[0] + '.disabled'));
+		}
+
+		script += 'echo "FlowLens: restored, reboot the router manually to apply."\n';
+
+		try {
+			writefile(dir + '/restore.sh', script);
+			run(sprintf('chmod 755 %s', shq(dir + '/restore.sh')));
+			writefile(BACKUP_MARKER, dir + '\n');
+		}
+		catch (e) {
+			return { success: false, message: { code: 'errBackupFailed', dir }, changed: [], failed };
+		}
+
+		// ---- 应用 ----
+		let changed = [];
+
+		if (fw_needed) {
+			try {
+				let ctx = cursor();
+				ctx.load('firewall');
+				ctx.set('firewall', '@defaults[0]', 'fullcone', '0');
+
+				// fullcone6 在旧版 fw4 里不存在，只改已经有的选项
+				if (ctx.get('firewall', '@defaults[0]', 'fullcone6') != null)
+					ctx.set('firewall', '@defaults[0]', 'fullcone6', '0');
+
+				ctx.commit('firewall');
+				push(changed, 'firewall.fullcone');
+			}
+			catch (e) {
+				push(failed, 'firewall: ' + e);
+			}
+		}
+
+		for (let src in targets) {
+			let r = disable_file(src);
+
+			if (r == 'renamed') push(changed, src);
+			else if (r == 'failed') push(failed, src);
+		}
+
+		let after = fullcone_state();
+
+		return {
+			success: (length(failed) == 0),
+			changed,
+			failed,
+			reboot_required: after.loaded,
+			backup_dir: dir
 		};
 	}
 };

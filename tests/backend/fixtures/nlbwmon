@@ -1,5 +1,5 @@
 config nlbwmon
-	option database_directory '/srv/nlbw'
+	option database_directory '/srv/nlbw/wrtbwstat'
 	option database_interval '2026-01-01/1'
 	option database_generations '95'
 	option commit_interval '6h'

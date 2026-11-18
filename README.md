@@ -9,7 +9,7 @@ FlowLens 是一个面向 OpenWrt / iStoreOS 的按设备流量统计插件项目
 - 前端：M2a 已完成——`app.js` / `app.css` 已构建入库，`npm run verify` 在 jsdom 中实测挂载通过（25 条断言），gzip 合计 41 KB。
 - 真机：已在 iStoreOS 24.10.8（rockchip/armv8，opkg）上部署跑通，页面可显示数据。
 - 前端功能：时间窗切换、汇总卡片、设备表（排序/搜索）、**设备详情（按日用量 + 协议分布）**、**设置页（采集参数 + 清库）** 均已实现。
-- 未完成：跨天/重启后历史保留验证（需真实积累）；`luci-app` 出包需完整 buildroot（M3）。
+- 未完成：跨天/重启后历史保留验证（需真实积累）；SDK/buildroot 正式出包（M3）。apk 已可通过 `scripts/pack-apk.sh` 手工产出并在 25.12 真机安装验证。
 
 ## 目录结构
 
@@ -129,7 +129,7 @@ sh scripts/build-in-sdk.sh ~/sdk/openwrt-sdk-24.10
 | 包 | ipk（24.10.5 SDK） | apk（25.12.6 SDK） |
 | --- | --- | --- |
 | `wrtbwstat` | ✅ `wrtbwstat_0.1.0-r1_all.ipk`（3.1 KB） | ✅ `wrtbwstat-0.1.0-r1.apk`（3.0 KB） |
-| `luci-app-wrtbwstat` | ⚠️ 未产出（环境限制，见下） | ⚠️ 未产出（同一限制） |
+| `luci-app-wrtbwstat` | ⚠️ SDK 未产出（环境限制，见下） | ⚠️ SDK 未产出（同一限制）→ ✅ 已用 `pack-apk.sh` 手工产出 |
 
 `wrtbwstat` 两种格式都已核验，元数据一致、仅格式不同：
 
@@ -150,7 +150,7 @@ data（两者） : /etc/config/wrtbwstat (0600)
 - 完整 buildroot（`git clone openwrt` + feeds，`make package/flowlens/luci-app-wrtbwstat/compile`），或
 - 一个 `staging_dir` 里带 `libucode` 头文件的 SDK。
 
-`wrtbwstat` 能出包正因为它只 `include $(INCLUDE_DIR)/package.mk`，不碰 `luci.mk`。
+`wrtbwstat` 能出包正因为它只 `include $(INCLUDE_DIR)/package.mk`，不碰 `luci.mk`。应用包的 apk 已改用 `apk mkpkg` 手工通道补齐（见下节），不依赖 SDK。
 
 **完整 buildroot 也试过，被网络挡住**：克隆源码、配好 feeds 后，工具链阶段需要从 `sources.openwrt.org` 下载 gcc/binutils/musl 等上百 MB 源码，该站此网络只有 3–15 KB/s（`downloads.openwrt.org` 同样慢），实际跑不完。脚本保留在 `scripts/build-in-sdk.sh`，换到网络正常的环境可直接用。
 
@@ -163,6 +163,44 @@ sh scripts/pack-ipk.sh          # 产物在 dist/
 ```
 
 **一个只有真装才会发现的坑**：包里的 `postinst` 必须与 `luci.mk` 生成的保持一致——除了清 LuCI 索引缓存，还要 `/etc/init.d/rpcd reload`。少了这一步，`opkg install` 明明成功，但 `ubus list` 里没有 `luci.wrtbwstat`，页面一直空白（rpcd 只在启动时加载 ucode 脚本）。`luci.mk` 第 236 行本来就做了这件事，手工打包时容易漏。
+
+### 手工打包 apk（备用通道，已实测）
+
+`scripts/pack-apk.sh` 用 apk-tools 3 自带的 `apk mkpkg` 直接生成 v3（ADB 格式）包，安装 `/lib/apk/packages/<包名>.list|.conffiles|.conffiles_static` 以对齐官方 apk 的 conffiles 语义。
+
+```sh
+# 需要带 mkpkg 的 apk-tools 3（Alpine 自带；Ubuntu/Debian 没有）
+sh scripts/pack-apk.sh          # 产物在 dist/
+```
+
+**不要手拼 apk v2 格式**：按旧规范拼出的 `control.tar.gz + data.tar.gz` 会被 apk 3 直接拒绝（`ADB header error` / `file format is invalid or inconsistent`），25.12 的包管理器只吃 v3。
+
+真机实测（2026-11-18，ImmortalWrt 25.12.2 / x86_64 / apk-tools 3.0.5）：
+
+| 项 | 结果 |
+| --- | --- |
+| `apk add --allow-untrusted` | 两包同时安装成功，依赖解析正常（libc / nlbwmon / rpcd-mod-ucode / luci-base） |
+| 安装后 `ubus list` | 直接出现 `luci.wrtbwstat`（`post-install` reload rpcd 生效） |
+| 六个 ubus 方法 | `get_settings` / `get_summary` / `get_devices` / `get_device` 均返回真实数据；`set_settings` 的 `errDirTmpfs`、`errRefresh`、`reset_database` 的 `errConfirm` 拒绝路径正确；合法值（`retention_days=95`）落盘生效 |
+| 静态资源 | `app.js` / `app.css` / `overview.js` 均 200 |
+| LuCI 页面 | 浏览器登录后正常渲染：五窗口汇总卡、设备区、fullcone 告警条，无 JS 报错 |
+| `apk del` | 文件清干净；`/etc/config/wrtbwstat` 作为**被改过的 conffile 保留**（apk 语义，与 opkg 一致） |
+
+据此补了一处包内容：`luci-app-wrtbwstat` 增加 `post-deinstall`（清索引缓存 + `rpcd reload`）。少了它，`apk del` 后 `ubus list` 里 `luci.wrtbwstat` 会一直残留到下次重启或手动 reload。
+
+同时修了一个只在真机主题下才暴露的样式问题：Argon 用裸元素选择器给 `button` 写了 `height:2.5rem`，而汇总卡是「标签 + 总量 + 上下行 + 趋势」四行内容的 `<button>`，被定成 40px 后叠加自身的 `overflow:hidden`，整张卡被裁成一条只看得见总量。`base.css` 里用 `.flowlens button { height: auto }` 把高度交回内容（`BaseButton`、分段控件同样受益）。本地 dev / jsdom 都复现不了这类问题——它们没有主题 CSS。
+
+还有一个数据面的真机问题：`reset_database` 原来只 glob `nlbwmon.db*`，而 25.12 的 nlbwmon 按账期命名库文件（`20261101.db.gz`、`20261118.db.gz`，`-Z` 时压缩），于是一个文件都删不到，却返回 `success:true, removed:0`，前端提示「已清空」而页面仍是 79.9 GB。现在改为同时匹配 `*.db` / `*.db.gz` / `nlbwmon.db*`。测试夹具原先也用 `nlbwmon.db` 这种旧命名，所以单测一直是绿的——已改成真实命名（3 个文件，断言 `removed=3`），这条只有真机才暴露。
+
+> 另：安装 `wrtbwstat` 只是铺好 `/etc/uci-defaults/80_wrtbwstat`，nlbwmon 的日账期/持久化目录要等**开机**由 uci-defaults 执行才生效；要立即生效就手动 `sh /etc/uci-defaults/80_wrtbwstat`（会重启 nlbwmon 并按 `storage_dir` 新建目录，未提交的计数会清零）。
+
+存储目录改成了「父目录 + 插件独占子目录」：`storage_dir` 只表示父目录（默认 `/mnt/usb`），nlbwmon 的库固定落在 `<storage_dir>/wrtbwstat/`。`reset_database` 会校验目录 basename 必须是 `wrtbwstat`，否则返回 `errDirUnavailable`，因此即使 `storage_dir` 被误设为盘根也不会清掉用户文件（真机上在 `/mnt/usb/keepme.txt` 存在时验证过拒绝路径）。旧版的 `storage_dir` 语义（默认 `.../nlbwmon`）会在 uci-defaults 里自动收敛为父目录并迁移旧库；`set_settings` 换目录时先停采集进程再迁移（`rename`，跨文件系统回退到 `mv`）。
+
+真机复测（ImmortalWrt 25.12.2）：`get_settings` 返回 `storage_dir=/mnt/usb`、`data_dir=/mnt/usb/wrtbwstat`；旧目录库文件自动迁移；嵌套父目录（`/mnt/usb/flowtest`）与跨文件系统（`/mnt/sda1`）切换均成功搬运；`reset_database` 只清子目录，返回 `removed=4, freed_bytes=82`，父目录文件无损。
+
+**fullcone NAT 与 conntrack 事件（真机踩坑）**：`firewall4` 启动时无论 `fullcone` 是否为 0，都会用 `nft` 试建一条 fullcone 规则探测支持性（`fw4.uc` 的 `nft_try_fullcone()`），内核因此加载 `nft_fullcone` 模块。该模块一旦加载，ctnetlink 的 NEW/DESTROY 事件就送不到用户态：`conntrack -L` 能看到流量，`conntrack -E` 一条事件都没有，nlbwmon 计数恒为 0。只 `uci set firewall.@defaults[0].fullcone=0` 或 `rmmod` 都不够——模块会在每次 firewall 启动时被重新加载，且卸载后事件也不会恢复，必须重启。彻底解决：把 `/lib/modules/<ver>/nft_fullcone.ko` 改名/移出模块目录后再重启（`fw4` 的探测失败会走已有的降级路径，日志出现 `nft_try_fullcone failed, disable fullcone globally`，属预期），代价是不再支持 fullcone NAT。处理后当天统计从 0 恢复为正常累计，`collect_warnings()` 也不再报 `warnFullcone`。
+
+这个处置已做进插件：告警条不再只有一句「可能无法送达」，而是带「一键修复」按钮（`ubus call luci.wrtbwstat fix_fullcone '{"confirm":true}'`）。后端会关闭 `firewall.fullcone/fullcone6`、把 `/etc/modules.d/nft-fullcone` 与所有 `nft_fullcone.ko*` 改名加 `.disabled`，只落盘不重启——插件不会自动重启路由器，页面在修复后改成「请手动重启」的提示，重启由用户自己完成。改动前会把要碰的文件原样备份到 `/etc/wrtbwstat/backup/<时间戳>/`，并生成 `restore.sh`（把三处改动原样还原，执行后同样需手动重启）；备份不完整则整体放弃、不做任何修改，接口返回 `errBackupFailed`。修复完成后接口返回 `backup_dir`，页面在「待重启」状态下继续展示备份路径，用户重启前都能看到怎么回退。模块若被编译进内核（找不到 `.ko`）则返回 `errFullconeBuiltin`，提示更换固件。因为会改变用户的 NAT 类型，动作必须由用户点击触发，`confirm=true` 才执行。
 
 > 附：25.12.6 SDK 解压后约 2.5 GB；构建前若缺 `.config`，直接 `make` 会拉起交互式 menuconfig 并因 `$TERM=unknown` 失败，先 `make defconfig` 即可。
 
@@ -357,13 +395,13 @@ ubus call luci.wrtbwstat get_device '{"mac":"aa:bb:cc:dd:ee:ff","range":"last7"}
 - [x] M1：`set_settings` 校验（拒绝 tmpfs 目录、保留期、刷新间隔白名单）与 `reset_database`。
 - [x] M1-verify：OpenWrt rootfs 容器内 144 条断言全通过（含 layer7 回退与 uci-defaults），修掉 4 个 ucode 语义问题。
 - [x] M1-verify-device：iStoreOS 24.10.8 真机确认列名、`-g mac,layer7` 可分组、`nlbw` 在 `/usr/sbin`。
-- [ ] M2b-verify：浏览器确认 LuCI 页面渲染与轮询。
+- [x] M2b-verify：浏览器确认 LuCI 页面渲染（2026-11-18，ImmortalWrt 25.12.2）；30s 轮询未单独观测。
 - [x] M2a：依赖安装与构建跑通，`app.js` / `app.css` / `package-lock.json` 入库；`npm run verify` 在 jsdom 中实测挂载通过。
-- [ ] M2b：25.12 LuCI 中联调薄壳 view，验证会话、ACL、poll 生命周期。
+- [x] M2b：25.12 LuCI 中联调薄壳 view——已于 ImmortalWrt 25.12.2 真机确认会话、ACL 与页面渲染；poll 生命周期未单独观测。
 - [x] M3-ipk：24.10.5 SDK 产出 `wrtbwstat` 的 ipk 并核验 control / conffiles / 文件权限。
 - [x] M3-apk：25.12.6 SDK 产出 `wrtbwstat-0.1.0-r1.apk` 并核验元数据与权限。
 - [x] M3-app-ipk：`luci-app-wrtbwstat` 的 ipk 已产出并在真机 install/remove 验证（`scripts/pack-ipk.sh`）；SDK/buildroot 出包受 `sources.openwrt.org` 限速所限未完成。
-- [ ] M3-apk-app：应用包的 apk 仍需 25.12 完整环境。
+- [x] M3-apk-app：`luci-app-wrtbwstat` 的 apk 已由 `scripts/pack-apk.sh`（apk-tools 3 `mkpkg`，v3/ADB 格式）产出，并在 ImmortalWrt 25.12.2 真机 install/remove 全流程验证；官方 SDK 出包仍待 M3。
 - [ ] M3-doc：编写安装与排错说明（apk / opkg 两套）。
 
 ## 技术基线

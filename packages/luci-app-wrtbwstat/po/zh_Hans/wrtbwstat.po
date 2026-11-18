@@ -142,6 +142,36 @@ msgstr "未开启 nf_conntrack_acct，流量计数可能缺失或偏低。"
 msgid "A fullcone NAT module was detected, conntrack events may not reach nlbwmon."
 msgstr "检测到 fullcone NAT 模块，conntrack 事件可能无法送达 nlbwmon。"
 
+msgid "fullcone and nlbwmon are mutually exclusive on this firmware: once the module is loaded, statistics stay at zero. The fix turns off fullcone NAT (affects NAT type for P2P and online games) and disables the kernel module. It only changes files and never reboots the router; a manual reboot is required."
+msgstr "fullcone 与 nlbwmon 在本固件上互斥：模块一旦加载，统计会一直是 0。修复会关闭 fullcone NAT（影响 P2P / 游戏联机的 NAT 类型）并禁用该内核模块。操作只改文件、不会自动重启，需要你手动重启路由器才生效。"
+
+msgid "fullcone is disabled; conntrack events resume after the router reboots."
+msgstr "fullcone 已禁用，重启路由器后 conntrack 事件才会恢复。"
+
+msgid "Reboot the router manually (System → Reboot); statistics resume after that. Counters before the reboot are not recovered."
+msgstr "请手动重启路由器（系统 → 重启）后恢复统计；重启前的计数不会补回。"
+
+msgid "Original files are backed up in {dir}; run restore.sh there to undo the change."
+msgstr "原始文件已备份到 {dir}，可运行其中的 restore.sh 回退（需手动重启）。"
+
+msgid "Fix automatically"
+msgstr "一键修复"
+
+msgid "Fixing…"
+msgstr "正在修复…"
+
+msgid "Fix failed. Check the system log for details."
+msgstr "修复失败，请检查系统日志。"
+
+msgid "Backup failed; nothing was changed. Check free space and try again."
+msgstr "备份失败，未做任何修改。请检查存储空间后重试。"
+
+msgid "Confirmation is required to apply the fix."
+msgstr "需要确认后才能执行修复。"
+
+msgid "fullcone support is built into this firmware kernel and cannot be disabled automatically."
+msgstr "该固件的 fullcone 已编译进内核，无法自动禁用，请改用不含 fullcone 的固件。"
+
 msgid "nlbwmon has no local_network configured, no traffic will be counted."
 msgstr "nlbwmon 未配置 local_network，可能统计不到任何网段。"
 

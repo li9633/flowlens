@@ -176,7 +176,7 @@ nftables 的命名 counter 虽可在规则重建后保留，但计数只存在�
 ### 4.3 采集配置基线
 
 ```sh
-uci set nlbwmon.@nlbwmon[0].database_directory='/mnt/usb/nlbwmon'
+uci set nlbwmon.@nlbwmon[0].database_directory='/mnt/usb/wrtbwstat'
 uci set nlbwmon.@nlbwmon[0].database_interval='2026-01-01/1'
 uci set nlbwmon.@nlbwmon[0].database_generations='95'
 uci set nlbwmon.@nlbwmon[0].commit_interval='6h'
@@ -191,7 +191,7 @@ echo 'net.netfilter.nf_conntrack_acct=1' > /etc/sysctl.d/99-wrtbwstat.conf
 
 `database_interval='2026-01-01/1'` 表示每 1 天开启一个账期；`database_generations=95` 提供 90 天查询窗口外的事故冗余。conntrack accounting 默认可能关闭，需显式开启；该参数仅对新建立的连接生效，部署后需重启相关服务或等待连接重建。
 
-`/mnt/usb/nlbwmon` 是假设挂载点，需按实际设备替换。
+`/mnt/usb` 是假设的挂载点，需按实际设备替换。插件配置里的 `storage_dir` 只表示这个父目录，nlbwmon 的库固定落在它的 `wrtbwstat/` 子目录：该目录只包含插件自己的账期库，清空数据库时按目录整体处理也不会误删用户的其他文件。
 
 ### 4.4 数据模型
 

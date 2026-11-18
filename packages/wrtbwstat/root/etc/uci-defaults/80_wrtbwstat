@@ -13,10 +13,27 @@ RETENTION_DAYS="$(uci -q get wrtbwstat.settings.retention_days)"
 COMMIT_INTERVAL="$(uci -q get wrtbwstat.settings.commit_interval)"
 COMPRESS="$(uci -q get wrtbwstat.settings.compress)"
 
-[ -n "$STORAGE_DIR" ]    || STORAGE_DIR="/mnt/usb/nlbwmon"
+[ -n "$STORAGE_DIR" ]    || STORAGE_DIR="/mnt/usb"
 [ -n "$RETENTION_DAYS" ] || RETENTION_DAYS="95"
 [ -n "$COMMIT_INTERVAL" ] || COMMIT_INTERVAL="6h"
 [ -n "$COMPRESS" ]       || COMPRESS="1"
+
+# 旧版把 storage_dir 直接当作数据库目录（默认以 /nlbwmon 结尾）。
+# 升级时把它收敛为父目录，避免出现 <旧目录>/wrtbwstat 的嵌套布局。
+case "${STORAGE_DIR%/}" in
+	*/nlbwmon)
+		STORAGE_DIR="${STORAGE_DIR%/}"
+		STORAGE_DIR="${STORAGE_DIR%/nlbwmon}"
+		STORAGE_DIR="${STORAGE_DIR%/}"
+		[ -n "$STORAGE_DIR" ] || STORAGE_DIR="/"
+		uci -q set wrtbwstat.settings.storage_dir="$STORAGE_DIR"
+		uci -q commit wrtbwstat
+		;;
+esac
+
+# 实际数据目录固定为 <storage_dir>/wrtbwstat：目录里只有插件自己的库文件，
+# 清空数据库时按目录处理也不会误删用户的其它数据。
+DATA_DIR="${STORAGE_DIR%/}/wrtbwstat"
 
 # --- nlbwmon 日账期基线 -----------------------------------------------------
 uci -q batch <<-EOF
@@ -27,15 +44,27 @@ uci -q batch <<-EOF
 	commit nlbwmon
 EOF
 
-# database_directory 只在尚未配置或仍为默认 tmpfs 路径时写入，
-# 避免覆盖用户已选择的其他持久化位置。
+# nlbwmon 的库固定落在 DATA_DIR；换目录时先把旧库搬过去（不覆盖同名文件）
+mkdir -p "$DATA_DIR" 2>/dev/null
+
 CURRENT_DIR="$(uci -q get nlbwmon.@nlbwmon[0].database_directory)"
-case "$CURRENT_DIR" in
-	""|/tmp/*|/var/*)
-		uci -q set nlbwmon.@nlbwmon[0].database_directory="${STORAGE_DIR}"
-		uci -q commit nlbwmon
-		;;
-esac
+if [ "$CURRENT_DIR" != "$DATA_DIR" ]; then
+	case "$CURRENT_DIR" in
+		""|/tmp/*|/var/*)
+			# 未配置或仍在 tmpfs：无需迁移
+			;;
+		*)
+			# 先停采集进程，让它把当前账期落盘后再迁移，否则会漏掉当天库
+			/etc/init.d/nlbwmon stop 2>/dev/null
+			for f in "$CURRENT_DIR"/*.db "$CURRENT_DIR"/*.db.gz "$CURRENT_DIR"/nlbwmon.db*; do
+				[ -f "$f" ] || continue
+				[ -e "$DATA_DIR/$(basename "$f")" ] || mv "$f" "$DATA_DIR/" 2>/dev/null
+			done
+			;;
+	esac
+	uci -q set nlbwmon.@nlbwmon[0].database_directory="$DATA_DIR"
+	uci -q commit nlbwmon
+fi
 
 # local_network 至少包含 lan；其他网段需用户在设置页补充。
 case " $(uci -q get nlbwmon.@nlbwmon[0].local_network) " in
@@ -44,15 +73,12 @@ case " $(uci -q get nlbwmon.@nlbwmon[0].local_network) " in
 esac
 
 # --- 存储目录 ---------------------------------------------------------------
-STORAGE_DIR_NOW="$(uci -q get nlbwmon.@nlbwmon[0].database_directory)"
-if [ -n "$STORAGE_DIR_NOW" ]; then
-	mkdir -p "$STORAGE_DIR_NOW" 2>/dev/null
-fi
+mkdir -p "$DATA_DIR" 2>/dev/null
 
-# 存储目录若仍落在 tmpfs，页面会告警；此处不做强改，只记录日志。
-case "$STORAGE_DIR_NOW" in
+# 数据目录若仍落在 tmpfs，页面会告警；此处不做强改，只记录日志。
+case "$DATA_DIR" in
 	/tmp/*|/var/*)
-		logger -t wrtbwstat "WARNING: nlbwmon database_directory '$STORAGE_DIR_NOW' is on tmpfs; history will be lost on reboot"
+		logger -t wrtbwstat "WARNING: data directory '$DATA_DIR' is on tmpfs; history will be lost on reboot"
 		;;
 esac
 

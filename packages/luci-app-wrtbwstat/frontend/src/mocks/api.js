@@ -66,6 +66,16 @@ const I18N = {
 	warnNoDirectory: 'nlbwmon 未配置数据库目录。',
 	warnAcctOff: 'nf_conntrack_acct 未开启，计数可能缺失或偏低。',
 	warnFullcone: '检测到 fullcone NAT 模块，可能导致 conntrack 事件无法送达 nlbwmon。',
+	warnFullconeAction: 'fullcone 与 nlbwmon 在本固件上互斥：模块一旦加载，统计会一直是 0。修复会关闭 fullcone NAT（影响 P2P / 游戏联机的 NAT 类型）并禁用该内核模块。操作只改文件、不会自动重启，需要你手动重启路由器才生效。',
+	warnFullconeReboot: 'fullcone 已禁用，重启路由器后 conntrack 事件才会恢复。',
+	warnFullconeRebootHint: '请手动重启路由器（系统 → 重启）后恢复统计；重启前的计数不会补回。',
+	backupHint: '原始文件已备份到 {dir}，可运行其中的 restore.sh 回退（需手动重启）。',
+	fixFullcone: '一键修复',
+	fixingFullcone: '正在修复…',
+	fixFullconeFailed: '修复失败，请检查系统日志。',
+	errFixConfirm: '需要确认后才能执行修复。',
+	errBackupFailed: '备份失败，未做任何修改。请检查存储空间后重试。',
+	errFullconeBuiltin: '该固件的 fullcone 已编译进内核，无法自动禁用，请改用不含 fullcone 的固件。',
 	warnNoLocalNet: 'nlbwmon 未配置 local_network，可能统计不到任何网段。',
 	errDirEmpty: '数据库目录不能为空。',
 	errDirTmpfs: '数据库目录不能位于 tmpfs（/tmp、/var）或根目录，否则重启丢历史。',
@@ -122,6 +132,9 @@ function devicesFor(range, sort, keyword) {
 }
 
 export function createMockApi() {
+	// dev 预览里点「一键修复」后，告警要能切到「重启后生效」
+	let fullconeFixed = false;
+
 	return {
 		async getSummary(range) {
 			return {
@@ -137,8 +150,13 @@ export function createMockApi() {
 						series: buildSeries(r.range, r.total)
 					};
 				}),
-				// 故意留一条告警，用来验证提示条的换行与多语言
-				warnings: [ { code: 'warnTmpfs', dir: '/var/lib/nlbwmon' } ]
+				// 故意留两条告警，用来验证提示条的换行、多语言与 fullcone 操作区
+				warnings: [
+					{ code: 'warnTmpfs', dir: '/var/lib/nlbwmon' },
+					fullconeFixed
+						? { code: 'warnFullconeReboot', dir: '/etc/wrtbwstat/backup/fullcone-20261118-223000' }
+						: { code: 'warnFullcone' }
+				]
 			};
 		},
 
@@ -200,6 +218,20 @@ export function createMockApi() {
 
 		async resetDatabase(confirm) {
 			return { success: confirm === true, removed: 3, failed: 0 };
+		},
+
+		async fixFullcone(confirm) {
+			if (confirm !== true)
+				return { success: false, message: { code: 'errFixConfirm' } };
+
+			fullconeFixed = true;
+
+			return {
+				success: true,
+				changed: [ 'firewall.fullcone', '/lib/modules/6.12.103/nft_fullcone.ko' ],
+				reboot_required: true,
+				backup_dir: '/etc/wrtbwstat/backup/fullcone-20261118-223000'
+			};
 		},
 
 		// dev 预览没有 LuCI 的页面生命周期，用 window.setInterval 近似
