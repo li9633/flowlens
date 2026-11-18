@@ -9,7 +9,7 @@ import vue from '@vitejs/plugin-vue';
 //   - JS/CSS 输出固定在 htdocs/luci-static/resources/wrtbwstat/，产物入库
 //   - gzip 总体积目标 <= 120 KB
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [ vue() ],
 
   resolve: {
@@ -21,6 +21,10 @@ export default defineConfig({
   },
 
   define: {
+    // lib 模式下 Vite 不会自动替换 process.env.NODE_ENV，而 Vue 的
+    // esm-bundler 构建通篇用它做 dev 校验开关。不显式替换会在浏览器里
+    // 抛 "process is not defined"，整页白屏。
+    'process.env.NODE_ENV': JSON.stringify(mode),
     __VUE_OPTIONS_API__: 'true',
     __VUE_PROD_DEVTOOLS__: 'false',
     __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: 'false'
@@ -45,4 +49,4 @@ export default defineConfig({
       }
     }
   }
-});
+}));
