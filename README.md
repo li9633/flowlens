@@ -208,6 +208,27 @@ IMAGE=docker.1panel.live/openwrt/rootfs:x86-64 sh tests/run-backend-tests.sh
 3. **`split(str)` 省略分隔符返回 `null`**，不是按空白拆分——DHCP 租约全部解析失败。需显式给分隔符并过滤空字段。
 4. **按"值当下标"取数组元素**（`REFRESH_CHOICES[60]`、`SORTS[sort]`）：数组只有 4 个元素，索引 60 恒为 null，导致刷新间隔校验永远失败、`sort=rx/hostname/mac` 全部静默回退成 `total`。改用显式成员判断。
 
+### 开发版部署（不打包，直接铺文件）
+
+正式包出来之前，联调用 `scripts/dev-deploy/`：把 `packages/` 下的文件按设备路径铺好再重启 rpcd。
+
+```sh
+# 1. 组装（任意 Linux 机器）
+mkdir -p /tmp/fl/stage && cp -r packages/luci-app-wrtbwstat/root/usr /tmp/fl/stage/
+cp -r packages/luci-app-wrtbwstat/htdocs/luci-static /tmp/fl/stage/www/
+cp -r packages/wrtbwstat/root/etc /tmp/fl/stage/
+cp scripts/dev-deploy/*.sh /tmp/fl/
+tar czf flowlens-dev.tar.gz -C /tmp/fl install-dev.sh uninstall-dev.sh stage
+
+# 2. 路由器上
+cd /tmp && wget -O fl.tgz http://<你的文件服务器>/flowlens-dev.tar.gz
+mkdir fl && tar xzf fl.tgz -C fl && cd fl && sh install-dev.sh
+```
+
+映射关系：`root/` → `/`，`htdocs/luci-static/` → `/www/luci-static/`。
+
+**注意**：OpenWrt 基础系统**没有 `install` 命令**（busybox 未编译该 applet），脚本里必须用 `mkdir -p` + `cp` + `chmod`，不要用 `install -m`。
+
 ### 真机冒烟测试（尚未执行）
 
 **前置条件：路由器必须已安装 `nlbwmon`**（`nlbw` 命令来自该包）。装包时 `wrtbwstat` 的 `DEPENDS:=+nlbwmon` 会自动带入，但手工验证阶段需先自己装：
