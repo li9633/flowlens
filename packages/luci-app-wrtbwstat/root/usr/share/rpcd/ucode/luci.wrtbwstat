@@ -132,6 +132,26 @@ function normalize_mac(m) {
 	return is_mac(s) ? s : null;
 }
 
+/**
+ * 热路径专用的 MAC 归一化。
+ *
+ * nlbw 和缓存文件里的 MAC 已经是标准格式，走 is_mac 的逐字符校验每行要 74µs，
+ * 90 天 × 200 台设备就是 1.3 秒。这里只校验长度和 5 个分隔符，
+ * 不可信来源（手填配置、请求参数）仍然走 is_mac。
+ */
+function normalize_mac_fast(m) {
+	if (type(m) != 'string' || length(m) != 17)
+		return null;
+
+	let s = lc(m);
+
+	if (substr(s, 2, 1) != ':' || substr(s, 5, 1) != ':' || substr(s, 8, 1) != ':' ||
+	    substr(s, 11, 1) != ':' || substr(s, 14, 1) != ':')
+		return null;
+
+	return s;
+}
+
 /** 判断路径是否落在 tmpfs（重启即失）——用于拒绝把数据库目录设在内存文件系统 */
 function is_tmpfs_path(p) {
 	if (type(p) != 'string' || length(p) == 0)
@@ -450,7 +470,7 @@ function day_by_mac(day) {
 	let q = nlbw_query(day, 'mac');
 
 	for (let r in q.rows) {
-		let mac = normalize_mac(r.mac);
+		let mac = normalize_mac_fast(r.mac);
 		if (!mac) continue;
 
 		let e = out[mac];
@@ -762,7 +782,7 @@ methods.get_device = {
 			let rx = 0, tx = 0;
 
 			for (let r in q.rows) {
-				if (normalize_mac(r.mac) != mac) continue;
+				if (normalize_mac_fast(r.mac) != mac) continue;
 
 				rx += num(r.rx_bytes);
 				tx += num(r.tx_bytes);
