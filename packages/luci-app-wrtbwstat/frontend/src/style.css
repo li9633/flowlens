@@ -200,3 +200,158 @@
 		width: 100%;
 	}
 }
+
+/* --- 头部右侧（时间窗 + 设置按钮） --- */
+
+.flowlens-header-right {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+/* --- 设备行可点击 --- */
+
+.flowlens-row {
+	cursor: pointer;
+}
+
+.flowlens-row:hover td {
+	background: var(--background-color-low, #f4f4f4);
+}
+
+.flowlens-row.is-selected td {
+	background: var(--background-color-low, #eef4ff);
+}
+
+/* --- 设备详情 --- */
+
+.flowlens-detail,
+.flowlens-settings {
+	margin-top: 1rem;
+}
+
+.flowlens-detail-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+	margin-bottom: 0.5rem;
+}
+
+.flowlens-detail-name {
+	font-size: 1.05rem;
+	font-weight: 600;
+	margin-right: 0.5rem;
+}
+
+.flowlens-detail-title {
+	margin: 1rem 0 0.5rem;
+	font-size: 0.95rem;
+}
+
+.flowlens-days {
+	display: flex;
+	align-items: flex-end;
+	gap: 2px;
+	overflow-x: auto;
+	padding-bottom: 0.25rem;
+}
+
+.flowlens-day {
+	flex: 1 0 4px;
+	min-width: 4px;
+	max-width: 48px;
+	text-align: center;
+}
+
+.flowlens-day-col {
+	display: flex;
+	flex-direction: column-reverse;
+	justify-content: flex-start;
+	height: 96px;
+	background: var(--fl-bar-bg);
+	border-radius: 2px;
+	overflow: hidden;
+}
+
+.flowlens-day-rx {
+	background: var(--fl-rx);
+	min-height: 1px;
+}
+
+.flowlens-day-tx {
+	background: var(--fl-tx);
+	min-height: 1px;
+}
+
+.flowlens-day-label {
+	margin-top: 2px;
+	font-size: 9px;
+	color: var(--fl-muted);
+	white-space: nowrap;
+}
+
+/* --- 协议分布 --- */
+
+.flowlens-protos {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+}
+
+.flowlens-proto {
+	display: grid;
+	grid-template-columns: minmax(6rem, 1fr) auto auto;
+	grid-template-areas:
+		"name bytes share"
+		"bar  bar   bar";
+	gap: 0 0.5rem;
+	align-items: baseline;
+}
+
+.flowlens-proto-name  { grid-area: name; }
+.flowlens-proto-bytes { grid-area: bytes; font-variant-numeric: tabular-nums; }
+.flowlens-proto-share { grid-area: share; color: var(--fl-muted); font-size: 0.85rem; min-width: 3rem; text-align: right; }
+.flowlens-proto .flowlens-bar { grid-area: bar; }
+
+/* --- 表单 --- */
+
+.flowlens-form {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+	gap: 0.75rem;
+}
+
+.flowlens-form label {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	font-size: 0.85rem;
+}
+
+.flowlens-form label span {
+	color: var(--fl-muted);
+}
+
+.flowlens-check {
+	flex-direction: row;
+	align-items: center;
+	gap: 0.4rem;
+}
+
+.flowlens-hint {
+	margin: 0.5rem 0;
+	font-size: 0.8rem;
+	color: var(--fl-muted);
+}
+
+.flowlens-actions {
+	margin-top: 0.5rem;
+}
+
+.flowlens-danger {
+	margin-top: 1.25rem;
+	padding-top: 0.75rem;
+	border-top: 1px solid var(--fl-border);
+}

@@ -13,10 +13,11 @@ const props = defineProps({
 	loading: { type: Boolean, default: false },
 	label: { type: Function, required: true },
 	sort: { type: String, default: 'total' },
-	keyword: { type: String, default: '' }
+	keyword: { type: String, default: '' },
+	selected: { type: String, default: '' }
 });
 
-const emit = defineEmits([ 'update:sort', 'update:keyword' ]);
+const emit = defineEmits([ 'update:sort', 'update:keyword', 'select' ]);
 
 const columns = [
 	{ key: 'hostname', text: 'device', sortable: true, align: '' },
@@ -69,7 +70,13 @@ function sortBy(key) {
 				</tr>
 			</thead>
 			<tbody>
-				<tr v-for="row in rows" :key="row.mac">
+				<tr
+					v-for="row in rows"
+					:key="row.mac"
+					class="flowlens-row"
+					:class="{ 'is-selected': row.mac === selected }"
+					@click="emit('select', row)"
+				>
 					<td class="flowlens-device">
 						<span class="flowlens-device-name">{{ row.hostname || row.mac }}</span>
 						<span class="flowlens-device-mac">{{ row.mac }}</span>

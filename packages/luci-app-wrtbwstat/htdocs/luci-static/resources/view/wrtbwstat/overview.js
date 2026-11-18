@@ -38,6 +38,18 @@ const callGetSettings = rpc.declare({
 	method: 'get_settings'
 });
 
+const callSetSettings = rpc.declare({
+	object: 'luci.wrtbwstat',
+	method: 'set_settings',
+	params: [ 'storage_dir', 'retention_days', 'commit_interval', 'compress', 'refresh_interval' ]
+});
+
+const callResetDatabase = rpc.declare({
+	object: 'luci.wrtbwstat',
+	method: 'reset_database',
+	params: [ 'confirm' ]
+});
+
 function loadStyle() {
 	if (document.querySelector('link[data-wrtbwstat-style]'))
 		return;
@@ -92,6 +104,8 @@ return view.extend({
 			getDevices: callGetDevices,
 			getDevice: callGetDevice,
 			getSettings: callGetSettings,
+			setSettings: callSetSettings,
+			resetDatabase: callResetDatabase,
 			addPoll: poll.add,
 			// 文案在 view 侧用 _() 注入：LuCI 的翻译扫描器不解析 .vue 文件
 			i18n: {
@@ -109,7 +123,32 @@ return view.extend({
 				search: _('Search device'),
 				empty: _('No traffic data yet.'),
 				loading: _('Loading…'),
-				error: _('Failed to load traffic data.')
+				error: _('Failed to load traffic data.'),
+
+				// 设备详情
+				detail: _('Device details'),
+				daily: _('Daily usage'),
+				protocols: _('Protocol distribution'),
+				close: _('Close'),
+				back: _('Back'),
+
+				// 设置
+				settings: _('Settings'),
+				save: _('Save'),
+				saved: _('Saved'),
+				storageDir: _('Database directory'),
+				retention: _('Retention (days)'),
+				refreshInterval: _('Auto refresh'),
+				commitInterval: _('Commit interval'),
+				compress: _('Compress old periods'),
+				off: _('Off'),
+				seconds: _('seconds'),
+				refreshHint: _('Refresh interval takes effect after reloading the page.'),
+				dangerZone: _('Danger zone'),
+				resetDb: _('Reset database'),
+				resetConfirm: _('I understand all history will be deleted'),
+				resetNeedConfirm: _('Please tick the confirmation box first.'),
+				resetDone: _('Database cleared.')
 			}
 		});
 

@@ -823,6 +823,9 @@ methods.set_settings = {
 			let restart = false;
 			let hasCollector = false;
 
+			// 目录未变化时不重启采集进程，避免丢掉尚未落盘的内存数据
+			let old_dir = uci_get('nlbwmon', '@nlbwmon[0]', 'database_directory');
+
 			try {
 				hasCollector = (cursor().get('nlbwmon', '@nlbwmon[0]') != null);
 			}
@@ -837,7 +840,8 @@ methods.set_settings = {
 					switch (kv[0]) {
 					case 'storage_dir':
 						ctx.set('nlbwmon', '@nlbwmon[0]', 'database_directory', kv[1]);
-						restart = true;
+						if (old_dir != kv[1])
+							restart = true;
 						break;
 					case 'retention_days':
 						ctx.set('nlbwmon', '@nlbwmon[0]', 'database_generations', kv[1]);

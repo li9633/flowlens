@@ -3,6 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue';
 import RangeTabs from './components/RangeTabs.vue';
 import SummaryCards from './components/SummaryCards.vue';
 import DeviceTable from './components/DeviceTable.vue';
+import DeviceDetail from './components/DeviceDetail.vue';
+import SettingsPanel from './components/SettingsPanel.vue';
 
 // FlowLens 根组件
 //
@@ -27,6 +29,20 @@ const devices = ref([]);
 const warnings = ref([]);
 const loading = ref(false);
 const error = ref('');
+
+// 当前点开的设备与设置面板开关
+const selected = ref(null);
+const showSettings = ref(false);
+
+function onSelect(device) {
+	selected.value = { mac: device.mac, hostname: device.hostname };
+}
+
+// 设置变更（改目录 / 清库）后需要重新拉数据
+function onSettingsChanged() {
+	selected.value = null;
+	load();
+}
 
 const totalBytes = computed(function() {
 	return devices.value.reduce(function(sum, d) { return sum + (d.total_bytes || 0); }, 0);
@@ -88,7 +104,14 @@ onMounted(async function() {
 	<div class="flowlens">
 		<div class="flowlens-header">
 			<h2>{{ t('title') }}</h2>
-			<RangeTabs v-model="range" :ranges="RANGES" :label="t" />
+			<div class="flowlens-header-right">
+				<RangeTabs v-model="range" :ranges="RANGES" :label="t" />
+				<button
+					type="button"
+					class="btn cbi-button cbi-button-neutral"
+					@click="showSettings = !showSettings"
+				>{{ t('settings') }}</button>
+			</div>
 		</div>
 
 		<div v-if="error" class="alert-message warning">{{ error }}</div>
@@ -105,6 +128,14 @@ onMounted(async function() {
 			:loading="loading && summary.length === 0"
 		/>
 
+		<SettingsPanel
+			v-if="showSettings"
+			:api="api"
+			:label="t"
+			@close="showSettings = false"
+			@changed="onSettingsChanged"
+		/>
+
 		<DeviceTable
 			v-model:sort="sort"
 			v-model:keyword="keyword"
@@ -113,6 +144,18 @@ onMounted(async function() {
 			:has-data="hasData"
 			:loading="loading"
 			:label="t"
+			:selected="selected?.mac ?? ''"
+			@select="onSelect"
+		/>
+
+		<DeviceDetail
+			v-if="selected"
+			:api="api"
+			:mac="selected.mac"
+			:hostname="selected.hostname"
+			:range="range"
+			:label="t"
+			@close="selected = null"
 		/>
 	</div>
 </template>

@@ -7,8 +7,9 @@ FlowLens 是一个面向 OpenWrt / iStoreOS 的按设备流量统计插件项目
 - 设计：v2 定稿（Vue 3 + Vite 前端、ucode 后端、nlbwmon 采集）。打包双轨：apk 主推，ipk 维护至 24.10 EOL。
 - 后端：M1 已实现——六个 ubus 方法全部落地，逐日读取 nlbw 账期并聚合，带历史账期缓存与采集告警。已在 OpenWrt rootfs 容器内用 mock nlbw 跑通 144 条断言。
 - 前端：M2a 已完成——`app.js` / `app.css` 已构建入库，`npm run verify` 在 jsdom 中实测挂载通过，gzip 合计 29 KB。
-- 真机：已在 iStoreOS 24.10.8（rockchip/armv8，opkg）上部署并跑通后端，`nlbw` 真实列名已确认。
-- 未完成：浏览器内页面渲染确认；`luci-app` 出包需完整 buildroot（M3）。
+- 真机：已在 iStoreOS 24.10.8（rockchip/armv8，opkg）上部署跑通，页面可显示数据。
+- 前端功能：时间窗切换、汇总卡片、设备表（排序/搜索）、**设备详情（按日用量 + 协议分布）**、**设置页（采集参数 + 清库）** 均已实现。
+- 未完成：跨天/重启后历史保留验证（需真实积累）；`luci-app` 出包需完整 buildroot（M3）。
 
 ## 目录结构
 
@@ -164,10 +165,10 @@ ubus 对象 `luci.wrtbwstat`，方法与入参见设计文档 5.1：
 | --- | --- | --- |
 | `get_summary` | `range` | M1 已实现：聚合 90 个自然日后按窗口求和，附 `series`、`warnings` |
 | `get_devices` | `range`, `sort`, `keyword` | M1 已实现：按 MAC 归并、别名/DHCP 名回退、排序与关键词过滤 |
-| `get_device` | `mac`, `range` | M1 已实现：日序列 + 协议分布（`layer7`，不可用时回退协议号） |
+| `get_device` | `mac`, `range` | M1 已实现；前端点击设备行即展开日序列 + 协议分布 |
 | `get_settings` | — | M1 已实现：插件设置 + nlbwmon 采集状态 + 风险告警 |
-| `set_settings` | 配置对象 | M1 已实现：校验（拒绝 tmpfs 目录、保留期 ≥90、刷新间隔白名单）后写 UCI 并同步 nlbwmon |
-| `reset_database` | `confirm` | M1 已实现：停 nlbwmon → 删 `nlbwmon.db*` → 重启，强制 `confirm=true` |
+| `set_settings` | 配置对象 | M1 已实现；设置页可改目录/保留期/落盘间隔/压缩/刷新间隔，目录未变则不重启采集 |
+| `reset_database` | `confirm` | M1 已实现；设置页危险区需勾选确认后才可点，强制 `confirm=true` |
 
 `range` 取值固定为 `today | yesterday | last7 | last30 | last90`；`sort` 取 `total | rx | tx | hostname | mac`。
 

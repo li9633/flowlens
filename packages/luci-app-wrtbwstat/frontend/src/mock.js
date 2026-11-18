@@ -103,7 +103,41 @@ export function createMockApi() {
 		},
 
 		async getDevice(mac, range) {
-			return { mac: mac, hostname: mac, range: range, days: [], protocols: [] };
+			const dev = DEVICES.find(function(d) { return d.mac === mac; });
+			const days = makeSeries(range, RANGES.find(function(r) { return r.range === range; })?.total ?? 0);
+
+			return {
+				mac: mac,
+				hostname: dev?.hostname || mac,
+				range: range,
+				proto_field: 'layer7',
+				days: days.map(function(d) {
+					const total = d.rx_bytes + d.tx_bytes;
+					return { date: d.date, rx_bytes: d.rx_bytes, tx_bytes: d.tx_bytes, total: total };
+				}),
+				protocols: [
+					{ name: 'HTTPS', rx_bytes: 6.8e8, tx_bytes: 1.5e8, total_bytes: 8.3e8, share: 0.55 },
+					{ name: 'HTTP', rx_bytes: 2.1e8, tx_bytes: 4.2e7, total_bytes: 2.52e8, share: 0.17 },
+					{ name: 'TCP/853', rx_bytes: 1.4e8, tx_bytes: 3.1e7, total_bytes: 1.71e8, share: 0.11 },
+					{ name: 'UDP/443', rx_bytes: 1.2e8, tx_bytes: 2.6e7, total_bytes: 1.46e8, share: 0.10 },
+					{ name: 'ICMP', rx_bytes: 9e7, tx_bytes: 1.1e7, total_bytes: 1.01e8, share: 0.07 }
+				],
+				errors: []
+			};
+		},
+
+		async setSettings(storage_dir, retention_days, commit_interval, compress, refresh_interval) {
+			if (typeof storage_dir === 'string' && storage_dir.startsWith('/tmp'))
+				return { success: false, errors: [ 'storage_dir 不能位于 tmpfs（/tmp、/var）或根目录' ] };
+
+			return { success: true, changed: [ 'storage_dir', 'retention_days', 'refresh_interval' ] };
+		},
+
+		async resetDatabase(confirm) {
+			if (confirm !== true)
+				return { success: false, message: '需要 confirm=true' };
+
+			return { success: true, removed: 3, failed: 0, freed_bytes: 4194304 };
 		},
 
 		async getSettings() {
@@ -129,6 +163,27 @@ export function createMockApi() {
 			share: '占比',
 			search: '搜索设备',
 			empty: '暂无流量数据。',
+			detail: '设备详情',
+			daily: '按日用量',
+			protocols: '协议分布',
+			close: '关闭',
+			back: '返回',
+			settings: '设置',
+			save: '保存',
+			saved: '已保存',
+			storageDir: '数据库目录',
+			retention: '保留天数',
+			refreshInterval: '自动刷新',
+			commitInterval: '落盘间隔',
+			compress: '压缩旧账期',
+			off: '关闭',
+			seconds: '秒',
+			refreshHint: '刷新间隔改动需刷新页面后生效。',
+			dangerZone: '危险操作',
+			resetDb: '清空数据库',
+			resetConfirm: '我确认清空全部历史数据',
+			resetNeedConfirm: '请先勾选确认框。',
+			resetDone: '数据库已清空。',
 			loading: '加载中…',
 			error: '流量数据加载失败。'
 		}
