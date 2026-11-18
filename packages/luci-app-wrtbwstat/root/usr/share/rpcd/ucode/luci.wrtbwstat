@@ -44,6 +44,13 @@ const REFRESH_CHOICES = [ 0, 10, 30, 60 ];
 const DEFAULT_RETENTION_DAYS = 95;
 const DEFAULT_REFRESH_INTERVAL = 30;
 
+// 容量保护：以 mock 实测的稳定上限为 100% —— 90 天 × 200 台/天 = 18000 设备日。
+// 设备日（每天出现的设备数逐日累加）才是聚合与渲染成本的真实放大因子，
+// 累计年限和累计字节数都不是。使用率超过 80% 时裁剪最旧的历史归档，留 20% 余量。
+const CAPACITY_DEVICE_DAYS = 18000;
+const CAPACITY_TRIGGER = 0.8;
+const CAPACITY_MIN_DAYS = 7;
+
 // ---------------------------------------------------------------------------
 // 通用工具
 // ---------------------------------------------------------------------------
@@ -728,6 +735,147 @@ function collector_info() {
 	};
 }
 
+// ---------------------------------------------------------------------------
+// 容量保护
+//
+// 100% = 实测边界（90 天 × 200 台/天 = 18000 设备日）。
+// 使用率 = 90 天窗口内所有设备的 days_active 之和 / 18000。
+// 超过 80% 时删除最旧的历史归档，把窗口内的数据量压回阈值以内；
+// 同时让插件自己的单日缓存与 rollup 同步失效，否则被删的数据还会从缓存里读出来。
+// ---------------------------------------------------------------------------
+
+function capacity_status_file() {
+	return CACHE_DIR + '/capacity.json';
+}
+
+function capacity_stats(data, withData) {
+	let deviceDays = 0;
+	let count = 0;
+
+	for (let mac in data.devs) {
+		deviceDays += data.devs[mac].days_active;
+		count++;
+	}
+
+	return {
+		limit_device_days: CAPACITY_DEVICE_DAYS,
+		trigger: CAPACITY_TRIGGER,
+		device_days: deviceDays,
+		device_count: count,
+		days_with_data: withData,
+		percent: (deviceDays * 1.0) / CAPACITY_DEVICE_DAYS,
+		keep_days: null,
+		cleaned_archives: 0,
+		cleaned_cache_files: 0,
+		updated: time()
+	};
+}
+
+function capacity_read() {
+	try {
+		let o = json(readfile(capacity_status_file()) ?? '');
+		return (type(o) == 'object') ? o : null;
+	}
+	catch (e) {
+		return null;
+	}
+}
+
+function capacity_write(stats) {
+	try {
+		mkdir(CACHE_DIR);
+		writefile(capacity_status_file(), sprintf('%J', stats));
+	}
+	catch (e) {
+		// 状态文件只用于设置页展示，写失败不影响主流程
+	}
+}
+
+/** 缓存文件名里取出 YYYYMMDD；rollup/状态文件返回 null */
+function cache_file_day(name) {
+	if (length(name) >= 8 && is_digits(substr(name, 0, 8)))
+		return substr(name, 0, 8);
+
+	if (length(name) >= 10 && is_day(substr(name, 0, 10)))
+		return replace(substr(name, 0, 10), '-', '');
+
+	return null;
+}
+
+/**
+ * 超阈值时裁剪最旧的历史（就地修改 stats 并返回）。
+ *
+ * 只动 nlbwmon 的归档（nlbwmon.db.<N>[.gz]，N 越大越旧），不碰当前库；
+ * 保留 keep 天的历史，宁可多留一天也不越过用户配置的窗口。
+ */
+function capacity_cleanup(stats) {
+	if (stats.device_days <= CAPACITY_TRIGGER * CAPACITY_DEVICE_DAYS)
+		return stats;
+
+	let activeDays = (stats.days_with_data > 0) ? stats.days_with_data : 1;
+	let avg = stats.device_days / activeDays;
+	let keep = int((CAPACITY_TRIGGER * CAPACITY_DEVICE_DAYS) / avg);
+
+	if (keep < CAPACITY_MIN_DAYS) keep = CAPACITY_MIN_DAYS;
+	if (keep > 90) keep = 90;
+
+	stats.keep_days = keep;
+
+	let dir = collector_info().directory;
+	if (type(dir) != 'string' || length(dir) < 2)
+		return stats;
+
+	let base = dir + '/';
+	let files = [];
+
+	// nlbwmon 的历史库按账期命名：YYYYMMDD.db / YYYYMMDD.db.gz（当前库是 nlbwmon.db）
+	for (let f in glob(base + '*.db*')) {
+		let name = substr(f, length(base));
+		let stamp = substr(name, 0, 8);
+
+		if (length(name) < 11 || !is_digits(stamp))
+			continue;
+
+		let rest = substr(name, 8);
+		if (rest != '.db' && rest != '.db.gz')
+			continue;
+
+		push(files, [ stamp, f ]);
+	}
+
+	// 旧 -> 新；保留最新的 keep-1 个归档（今天的数据在当前库里，共 keep 天）
+	sort(files, function(a, b) { return cmp_str(a[0], b[0]); });
+
+	let keepArchives = (keep > 0) ? keep - 1 : 0;
+
+	for (let i = 0; i < length(files) - keepArchives; i++) {
+		try {
+			if (unlink(files[i][1]))
+				stats.cleaned_archives++;
+		}
+		catch (e) {}
+	}
+
+	// 被裁掉的日期不能继续从插件的单日缓存 / rollup 里读出来
+	let cutoff = replace(day_at(keep - 1), '-', '');
+	let cacheBase = CACHE_DIR + '/';
+
+	for (let f in glob(cacheBase + '*')) {
+		let name = substr(f, length(cacheBase));
+		let day = cache_file_day(name);
+
+		if ((day != null && day < cutoff) || substr(name, 0, 7) == 'rollup-') {
+			try {
+				if (unlink(f))
+					stats.cleaned_cache_files++;
+			}
+			catch (e) {}
+		}
+	}
+
+	return stats;
+}
+
 /** 采集链路风险提示，供页面顶部告警条消费 */
 function collect_warnings() {
 	let warnings = [];
@@ -821,12 +969,23 @@ methods.get_summary = {
 			});
 		}
 
+		// 容量保护：先算当前负载，超阈值就裁掉最旧的历史，并把结果留给设置页展示
+		let prev = capacity_read();
+		let capacity = capacity_cleanup(capacity_stats(data, withData));
+
+		capacity.last_cleanup = (capacity.cleaned_archives > 0)
+			? { at: time(), cleaned: capacity.cleaned_archives, keep_days: capacity.keep_days }
+			: (prev?.last_cleanup ?? null);
+
+		capacity_write(capacity);
+
 		return {
 			range,
 			updated: time(),
 			timezone: trim(readfile('/etc/TZ') ?? ''),
 			days_with_data: withData,
 			ranges,
+			capacity,
 			warnings: collect_warnings(),
 			errors: nlbw_bin() ? [] : [ 'nlbw 不可用，全部数据为空。' ]
 		};
@@ -977,6 +1136,21 @@ methods.get_settings = {
 		let settings = read_settings();
 		let info = collector_info();
 
+		// 容量状态由 get_summary 周期写入；还没跑过汇总时给出阈值与空指标
+		let capacity = capacity_read() ?? {
+			limit_device_days: CAPACITY_DEVICE_DAYS,
+			trigger: CAPACITY_TRIGGER,
+			device_days: null,
+			device_count: null,
+			days_with_data: null,
+			percent: null,
+			keep_days: null,
+			cleaned_archives: 0,
+			cleaned_cache_files: 0,
+			updated: null,
+			last_cleanup: null
+		};
+
 		return {
 			storage_dir: settings.storage_dir,
 			retention_days: settings.retention_days,
@@ -984,6 +1158,7 @@ methods.get_settings = {
 			compress: settings.compress,
 			refresh_interval: settings.refresh_interval,
 			collector: info,
+			capacity,
 			cache_dir: CACHE_DIR,
 			warnings: collect_warnings()
 		};

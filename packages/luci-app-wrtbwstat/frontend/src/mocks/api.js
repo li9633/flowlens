@@ -50,6 +50,17 @@ const I18N = {
 	resetConfirm: '我确认将删除全部历史数据',
 	resetNeedConfirm: '请先勾选确认框。',
 	resetDone: '数据库已清空。',
+	capacityTitle: '容量保护',
+	capacityRule: '实测上限：90 天 × 200 台/天（18000 设备日）为 100%。',
+	capacityAction: '使用率超过 80% 时，自动删除最旧的历史归档，把负载压回阈值以内。',
+	capacityEffect: '被清理的日期仍会出现在 90 天窗口中，但流量显示为 0。',
+	capacityUsage: '当前使用率',
+	capacityDeviceDays: '设备日',
+	capacityPending: '容量指标将在下次数据刷新后显示。',
+	capacityLastCleanup: '上次清理',
+	capacityKeep: '保留最近',
+	capacityDays: '天',
+	capacityArchives: '个归档已删除',
 	unknownDevice: '未知设备',
 	warnTmpfs: '数据库目录位于 tmpfs（{dir}），重启后历史数据会丢失。',
 	warnNlbwMissing: 'nlbw 命令缺失，nlbwmon 可能未安装。',
@@ -166,7 +177,18 @@ export function createMockApi() {
 				commit_interval: '6h',
 				compress: true,
 				refresh_interval: 30,
-				collector: { directory: '/dockers-data/nlbwmon' }
+				collector: { directory: '/dockers-data/nlbwmon' },
+				capacity: {
+					limit_device_days: 18000,
+					trigger: 0.8,
+					device_days: 270,
+					device_count: 3,
+					days_with_data: 90,
+					percent: 0.015,
+					keep_days: null,
+					cleaned_archives: 0,
+					last_cleanup: null
+				}
 			};
 		},
 

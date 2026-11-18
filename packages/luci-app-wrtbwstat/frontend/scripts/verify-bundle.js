@@ -84,7 +84,13 @@ const api = {
 		// 故意用非默认值 30：表单若没真正回填，下拉会停在首项 0（"Off"），
 		// 断言就能分辨"渲染了默认值"和"绑上了后端值"
 		commit_interval: '6h', compress: true, refresh_interval: 30,
-		collector: { directory: '/var/lib/nlbwmon' }
+		collector: { directory: '/var/lib/nlbwmon' },
+		capacity: {
+			limit_device_days: 18000, trigger: 0.8,
+			device_days: 270, device_count: 3, days_with_data: 90,
+			percent: 0.015, keep_days: null, cleaned_archives: 0,
+			last_cleanup: null
+		}
 	}),
 	setSettings: async () => ({ success: true }),
 	resetDatabase: async (confirm) => ({ success: confirm === true, removed: 2 }),
@@ -106,7 +112,18 @@ const api = {
 		dangerZone: 'Danger zone', resetDb: 'Reset database',
 		resetConfirm: 'I understand all history will be deleted',
 		resetNeedConfirm: 'Please tick the confirmation box first.',
-		resetDone: 'Database cleared.'
+		resetDone: 'Database cleared.',
+		capacityTitle: 'Capacity protection',
+		capacityRule: 'Validated limit: 90 days x 200 devices/day (18,000 device-days) is 100%.',
+		capacityAction: 'When usage exceeds 80%, the oldest history archives are deleted automatically until the load falls back under the threshold.',
+		capacityEffect: 'Cleaned-up days still appear in the 90-day window but show zero traffic.',
+		capacityUsage: 'Current load',
+		capacityDeviceDays: 'device-days',
+		capacityPending: 'Capacity metrics will appear after the next data refresh.',
+		capacityLastCleanup: 'Last cleanup',
+		capacityKeep: 'history kept',
+		capacityDays: 'days',
+		capacityArchives: 'archives removed'
 	}
 };
 
@@ -173,7 +190,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 		for (const [ name, pass ] of Object.entries({
 			'设置面板渲染存储目录': sh.includes('Database directory'),
 			'设置面板渲染保留天数': sh.includes('Retention (days)'),
-			'设置面板渲染危险操作': sh.includes('Danger zone')
+			'设置面板渲染危险操作': sh.includes('Danger zone'),
+			'设置面板渲染容量保护': sh.includes('Capacity protection') && sh.includes('Current load'),
+			'容量保护展示使用率与上限': sh.includes('1.5%') && sh.includes('270 / 18000 device-days')
 		})) {
 			console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
 			if (!pass) ok = false;
@@ -222,6 +241,14 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 		refreshHint: '刷新间隔改动需刷新页面后生效。', dangerZone: '危险操作',
 		resetDb: '清空数据库', resetConfirm: '我确认清空全部历史数据',
 		resetNeedConfirm: '请先勾选确认框。', resetDone: '数据库已清空。',
+		capacityTitle: '容量保护',
+		capacityRule: '实测上限：90 天 × 200 台/天（18000 设备日）为 100%。',
+		capacityAction: '使用率超过 80% 时，自动删除最旧的历史归档，把负载压回阈值以内。',
+		capacityEffect: '被清理的日期仍会出现在 90 天窗口中，但流量显示为 0。',
+		capacityUsage: '当前使用率', capacityDeviceDays: '设备日',
+		capacityPending: '容量指标将在下次数据刷新后显示。',
+		capacityLastCleanup: '上次清理', capacityKeep: '保留最近',
+		capacityDays: '天', capacityArchives: '个归档已删除',
 		unknownDevice: '未知设备',
 		warnTmpfs: '数据库目录位于 tmpfs（{dir}），重启后历史数据会丢失。',
 		warnNlbwMissing: 'nlbw 命令缺失，nlbwmon 可能未安装。',
@@ -242,11 +269,18 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 	await wait(300);
 
 	const zh = el2.innerHTML;
+	const zhSettingsBtn = Array.from(el2.querySelectorAll('button')).find((b) => b.textContent.trim() === '设置');
+	zhSettingsBtn?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+	await wait(200);
+	const zhSettings = el2.innerHTML;
+
 	for (const [ name, pass ] of Object.entries({
 		'中文：标题已翻译': zh.includes('流量统计'),
 		'中文：不再出现英文标题': !zh.includes('Traffic usage'),
 		'中文：表头已翻译': zh.includes('下行') && !zh.includes('Download'),
-		'中文：告警已本地化且参数替换': zh.includes('数据库目录位于 tmpfs（/var/lib/nlbwmon）')
+		'中文：告警已本地化且参数替换': zh.includes('数据库目录位于 tmpfs（/var/lib/nlbwmon）'),
+		'中文：容量保护已本地化': zhSettings.includes('容量保护') && !zhSettings.includes('Capacity protection'),
+		'中文：容量保护说明含阈值': zhSettings.includes('使用率超过 80%')
 	})) {
 		console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
 		if (!pass) ok = false;

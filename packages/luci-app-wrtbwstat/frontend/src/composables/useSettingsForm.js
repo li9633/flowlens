@@ -12,6 +12,7 @@ export function useSettingsForm(api, t) {
 	const form = reactive({ ...DEFAULT_SETTINGS });
 
 	const collector = ref(null);
+	const capacity = ref(null);
 	const errors = ref([]);
 	const notice = ref('');
 
@@ -27,6 +28,7 @@ export function useSettingsForm(api, t) {
 		form.refresh_interval = Number(settings?.refresh_interval ?? DEFAULT_SETTINGS.refresh_interval);
 
 		collector.value = settings?.collector ?? null;
+		capacity.value = settings?.capacity ?? null;
 	}
 
 	async function load() {
@@ -113,6 +115,7 @@ export function useSettingsForm(api, t) {
 	return {
 		form,
 		collector,
+		capacity,
 		errors,
 		notice,
 		saving,

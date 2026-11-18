@@ -5,6 +5,7 @@ import BaseButton from '../ui/BaseButton.vue';
 import BaseCallout from '../ui/BaseCallout.vue';
 import AppIcon from '../ui/AppIcon.vue';
 import SettingsFields from './SettingsFields.vue';
+import CapacityGuard from './CapacityGuard.vue';
 import DangerZone from './DangerZone.vue';
 import { useSettingsForm } from '../../composables/useSettingsForm.js';
 import { useI18n } from '../../composables/useI18n.js';
@@ -23,6 +24,7 @@ const { t, tm } = useI18n();
 const {
 	form,
 	collector,
+	capacity,
 	errors,
 	notice,
 	saving,
@@ -80,6 +82,8 @@ async function onReset() {
 				{{ t('save') }}
 			</BaseButton>
 		</div>
+
+		<CapacityGuard :capacity="capacity" />
 
 		<DangerZone
 			v-model="confirmReset"

@@ -57,6 +57,17 @@ if (phase == 'read') {
 	check('summary.days_with_data', sum.days_with_data, 90);
 	check('summary.range_echo', sum.range, 'last7');
 
+	printf("\n### 容量保护（未超阈值）\n");
+	// 3 台设备 × 90 天 = 270 设备日；阈值 18000 × 80% = 14400
+	check('capacity.limit_device_days', sum.capacity.limit_device_days, 18000);
+	check('capacity.device_days', sum.capacity.device_days, 270);
+	check('capacity.keep_days', sum.capacity.keep_days, null);
+	check('capacity.percent', sprintf('%.3f', sum.capacity.percent), '0.015');
+
+	let st2 = methods.get_settings.call({ args: {} });
+	check('settings.capacity_device_days', st2.capacity.device_days, 270);
+	check('settings.capacity_limit', st2.capacity.limit_device_days, 18000);
+
 	printf("\n### get_devices(yesterday) 的账期\n");
 	let ydev = methods.get_devices.call({ args: { range: 'yesterday', sort: 'total', keyword: '' } });
 	printf("  days=%s total=%d count=%d\n", ydev.days[0], ydev.total_bytes, ydev.device_count);
@@ -193,6 +204,51 @@ else {
 	check('reset.removed', reset.removed, 2);
 	check('reset.freed_bytes', reset.freed_bytes > 0, true);
 	check('reset.directory', reset.directory, '/srv/nlbw');
+
+	printf("\n### 容量保护：超阈值裁剪\n");
+	let capDir = '/tmp/capdb';
+	mkdir(capDir);
+
+	let oldest = replace(day_at(95), '-', '');
+	let newest = replace(day_at(1), '-', '');
+
+	for (let i = 1; i <= 95; i++)
+		writefile(sprintf('%s/%s.db.gz', capDir, replace(day_at(i), '-', '')), 'x');
+
+	// 当前库不能被当成历史归档删掉
+	writefile(capDir + '/nlbwmon.db', 'x');
+
+	writefile('/tmp/wrtbwstat-cache/20000101-mac.json', '[]');
+	writefile('/tmp/wrtbwstat-cache/20000101-mac.miss', '0\n');
+	writefile('/tmp/wrtbwstat-cache/rollup-last90-mac.json', '{}');
+	writefile('/tmp/wrtbwstat-cache/capacity.json', '{}');
+
+	let uctx = cursor();
+	uctx.load('nlbwmon');
+	uctx.set('nlbwmon', '@nlbwmon[0]', 'database_directory', capDir);
+	uctx.commit('nlbwmon');
+
+	// 18000 设备日 / 90 天 = 200 台/天；80% 上限 => 保留 72 天（71 个归档）
+	let cs = {
+		device_days: 18000, days_with_data: 90,
+		keep_days: null, cleaned_archives: 0, cleaned_cache_files: 0
+	};
+	capacity_cleanup(cs);
+
+	check('capacity.cleanup_keep_days', cs.keep_days, 72);
+	check('capacity.cleanup_archives', cs.cleaned_archives, 24);
+	check('capacity.cleanup_left', length(glob(capDir + '/*.db.gz')), 71);
+	check('capacity.cleanup_oldest_gone', !access(sprintf('%s/%s.db.gz', capDir, oldest)), true);
+	check('capacity.cleanup_newest_kept', !!access(sprintf('%s/%s.db.gz', capDir, newest)), true);
+	check('capacity.cleanup_current_kept', !!access(capDir + '/nlbwmon.db'), true);
+
+	check('capacity.cache_pruned', !access('/tmp/wrtbwstat-cache/20000101-mac.json'), true);
+	check('capacity.miss_pruned', !access('/tmp/wrtbwstat-cache/20000101-mac.miss'), true);
+	check('capacity.rollup_pruned', !access('/tmp/wrtbwstat-cache/rollup-last90-mac.json'), true);
+	check('capacity.status_kept', !!access('/tmp/wrtbwstat-cache/capacity.json'), true);
+
+	uctx.set('nlbwmon', '@nlbwmon[0]', 'database_directory', '/srv/nlbw');
+	uctx.commit('nlbwmon');
 }
 
 printf("\n=== %s：%d 项断言失败 ===\n", failed ? "FAILED" : "ALL PASS", failed);
