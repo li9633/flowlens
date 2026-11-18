@@ -1,0 +1,173 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: luci-app-wrtbwstat\n"
+"PO-Revision-Date: 2026-11-18 14:30+0800\n"
+"Last-Translator: FlowLens\n"
+"Language-Team: Chinese (Simplified)\n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "Traffic usage"
+msgstr "流量统计"
+
+msgid "Today"
+msgstr "今天"
+
+msgid "Yesterday"
+msgstr "昨天"
+
+msgid "Last 7 days"
+msgstr "近 7 天"
+
+msgid "Last 30 days"
+msgstr "近 30 天"
+
+msgid "Last 90 days"
+msgstr "近 90 天"
+
+msgid "Device"
+msgstr "设备"
+
+msgid "Download"
+msgstr "下行"
+
+msgid "Upload"
+msgstr "上行"
+
+msgid "Total"
+msgstr "合计"
+
+msgid "Share"
+msgstr "占比"
+
+msgid "Search device"
+msgstr "搜索设备"
+
+msgid "No traffic data yet."
+msgstr "暂无流量数据。"
+
+msgid "Loading…"
+msgstr "加载中…"
+
+msgid "Failed to load traffic data."
+msgstr "加载流量数据失败。"
+
+msgid "Failed to initialize the traffic statistics frontend."
+msgstr "流量统计前端初始化失败。"
+
+# 设备详情
+msgid "Device details"
+msgstr "设备详情"
+
+msgid "Daily usage"
+msgstr "按日用量"
+
+msgid "Protocol distribution"
+msgstr "协议分布"
+
+msgid "Close"
+msgstr "关闭"
+
+msgid "Back"
+msgstr "返回"
+
+msgid "Unknown device"
+msgstr "未知设备"
+
+# 设置
+msgid "Settings"
+msgstr "设置"
+
+msgid "Save"
+msgstr "保存"
+
+msgid "Saved"
+msgstr "已保存"
+
+msgid "Database directory"
+msgstr "数据库目录"
+
+msgid "Retention (days)"
+msgstr "保留天数"
+
+msgid "Auto refresh"
+msgstr "自动刷新"
+
+msgid "Commit interval"
+msgstr "落盘间隔"
+
+msgid "Compress old periods"
+msgstr "压缩旧账期"
+
+msgid "Off"
+msgstr "关闭"
+
+msgid "seconds"
+msgstr "秒"
+
+msgid "Refresh interval takes effect after reloading the page."
+msgstr "刷新间隔的改动在刷新页面后生效。"
+
+msgid "Danger zone"
+msgstr "危险操作"
+
+msgid "Reset database"
+msgstr "清空数据库"
+
+msgid "I understand all history will be deleted"
+msgstr "我确认将删除全部历史数据"
+
+msgid "Please tick the confirmation box first."
+msgstr "请先勾选确认框。"
+
+msgid "Database cleared."
+msgstr "数据库已清空。"
+
+# 后端 code 对应的文案（后端只回 code，文案在此翻译）
+msgid "nlbw command not found, nlbwmon may not be installed."
+msgstr "未找到 nlbw 命令，nlbwmon 可能未安装。"
+
+msgid "nlbwmon has no database directory configured."
+msgstr "nlbwmon 未配置数据库目录。"
+
+msgid "Database directory is on tmpfs ({dir}), history will be lost after reboot."
+msgstr "数据库目录位于 tmpfs（{dir}），重启后历史数据会丢失。"
+
+msgid "nf_conntrack_acct is disabled, counters may be missing or low."
+msgstr "未开启 nf_conntrack_acct，流量计数可能缺失或偏低。"
+
+msgid "A fullcone NAT module was detected, conntrack events may not reach nlbwmon."
+msgstr "检测到 fullcone NAT 模块，conntrack 事件可能无法送达 nlbwmon。"
+
+msgid "nlbwmon has no local_network configured, no traffic will be counted."
+msgstr "nlbwmon 未配置 local_network，可能统计不到任何网段。"
+
+msgid "Database directory must not be empty."
+msgstr "数据库目录不能为空。"
+
+msgid "Database directory must not be on tmpfs (/tmp, /var) or the root directory, otherwise history is lost after reboot."
+msgstr "数据库目录不能位于 tmpfs（/tmp、/var）或根目录，否则重启后会丢失历史。"
+
+msgid "Retention must be between 90 and 3650 days."
+msgstr "保留天数需在 90 至 3650 天之间。"
+
+msgid "Auto refresh must be one of 0 / 10 / 30 / 60."
+msgstr "自动刷新间隔只能是 0 / 10 / 30 / 60 秒。"
+
+msgid "Commit interval must look like 6h or 30m."
+msgstr "落盘间隔格式应形如 6h 或 30m。"
+
+msgid "Failed to write configuration: {detail}"
+msgstr "写入配置失败：{detail}"
+
+msgid "confirm=true is required to clear the database."
+msgstr "需要 confirm=true 才能清空数据库。"
+
+msgid "Database directory is not configured or not usable, aborted."
+msgstr "数据库目录未配置或不可用，已中止。"
+
+msgid "Invalid MAC address."
+msgstr "MAC 地址无效。"

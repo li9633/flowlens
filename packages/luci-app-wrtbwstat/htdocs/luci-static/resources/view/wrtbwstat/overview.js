@@ -15,6 +15,78 @@
 
 const BUNDLE_BASE = '/luci-static/resources/wrtbwstat';
 
+// LuCI 的 _() 依赖 /usr/lib/lua/luci/i18n 里的 .lmo。本应用随包提供
+// wrtbwstat.zh-cn.lmo，但不同固件的语言目录命名不一定一致；为了不出现
+// "一半中文一半英文"，这里再加一层内置词典兜底，按 <html lang> 选择。
+const UI_LANG = (document.documentElement.getAttribute('lang') || 'en').toLowerCase();
+const IS_ZH = UI_LANG.indexOf('zh') === 0;
+
+const ZH = {
+	'Traffic usage': '流量统计',
+	'Today': '今天',
+	'Yesterday': '昨天',
+	'Last 7 days': '近 7 天',
+	'Last 30 days': '近 30 天',
+	'Last 90 days': '近 90 天',
+	'Device': '设备',
+	'Download': '下行',
+	'Upload': '上行',
+	'Total': '合计',
+	'Share': '占比',
+	'Search device': '搜索设备',
+	'No traffic data yet.': '暂无流量数据。',
+	'Loading…': '加载中…',
+	'Failed to load traffic data.': '加载流量数据失败。',
+	'Failed to initialize the traffic statistics frontend.': '流量统计前端初始化失败。',
+	'Device details': '设备详情',
+	'Daily usage': '按日用量',
+	'Protocol distribution': '协议分布',
+	'Close': '关闭',
+	'Back': '返回',
+	'Unknown device': '未知设备',
+	'Settings': '设置',
+	'Save': '保存',
+	'Saved': '已保存',
+	'Database directory': '数据库目录',
+	'Retention (days)': '保留天数',
+	'Auto refresh': '自动刷新',
+	'Commit interval': '落盘间隔',
+	'Compress old periods': '压缩旧账期',
+	'Off': '关闭',
+	'seconds': '秒',
+	'Refresh interval takes effect after reloading the page.': '刷新间隔的改动在刷新页面后生效。',
+	'Danger zone': '危险操作',
+	'Reset database': '清空数据库',
+	'I understand all history will be deleted': '我确认将删除全部历史数据',
+	'Please tick the confirmation box first.': '请先勾选确认框。',
+	'Database cleared.': '数据库已清空。',
+	'nlbw command not found, nlbwmon may not be installed.': '未找到 nlbw 命令，nlbwmon 可能未安装。',
+	'nlbwmon has no database directory configured.': 'nlbwmon 未配置数据库目录。',
+	'Database directory is on tmpfs ({dir}), history will be lost after reboot.': '数据库目录位于 tmpfs（{dir}），重启后历史数据会丢失。',
+	'nf_conntrack_acct is disabled, counters may be missing or low.': '未开启 nf_conntrack_acct，流量计数可能缺失或偏低。',
+	'A fullcone NAT module was detected, conntrack events may not reach nlbwmon.': '检测到 fullcone NAT 模块，conntrack 事件可能无法送达 nlbwmon。',
+	'nlbwmon has no local_network configured, no traffic will be counted.': 'nlbwmon 未配置 local_network，可能统计不到任何网段。',
+	'Database directory must not be empty.': '数据库目录不能为空。',
+	'Database directory must not be on tmpfs (/tmp, /var) or the root directory, otherwise history is lost after reboot.': '数据库目录不能位于 tmpfs（/tmp、/var）或根目录，否则重启后会丢失历史。',
+	'Retention must be between 90 and 3650 days.': '保留天数需在 90 至 3650 天之间。',
+	'Auto refresh must be one of 0 / 10 / 30 / 60.': '自动刷新间隔只能是 0 / 10 / 30 / 60 秒。',
+	'Commit interval must look like 6h or 30m.': '落盘间隔格式应形如 6h 或 30m。',
+	'Failed to write configuration: {detail}': '写入配置失败：{detail}',
+	'confirm=true is required to clear the database.': '需要 confirm=true 才能清空数据库。',
+	'Database directory is not configured or not usable, aborted.': '数据库目录未配置或不可用，已中止。',
+	'Invalid MAC address.': 'MAC 地址无效。',
+};
+
+function T(src) {
+	const translated = _(src);
+
+	if (translated !== src)
+		return translated;          // LuCI 翻译生效（.lmo 已加载）
+
+	return IS_ZH ? (ZH[src] || src) : src;
+}
+
+
 const callGetSummary = rpc.declare({
 	object: 'luci.wrtbwstat',
 	method: 'get_summary',
@@ -97,7 +169,7 @@ return view.extend({
 
 		if (!App || typeof App.mount !== 'function')
 			return E('div', { 'class': 'alert-message warning' },
-				_('Failed to initialize the traffic statistics frontend.'));
+				T('Failed to initialize the traffic statistics frontend.'));
 
 		App.mount(el, {
 			getSummary: callGetSummary,
@@ -109,46 +181,64 @@ return view.extend({
 			addPoll: poll.add,
 			// 文案在 view 侧用 _() 注入：LuCI 的翻译扫描器不解析 .vue 文件
 			i18n: {
-				title: _('Traffic usage'),
-				today: _('Today'),
-				yesterday: _('Yesterday'),
-				last7: _('Last 7 days'),
-				last30: _('Last 30 days'),
-				last90: _('Last 90 days'),
-				device: _('Device'),
-				download: _('Download'),
-				upload: _('Upload'),
-				total: _('Total'),
-				share: _('Share'),
-				search: _('Search device'),
-				empty: _('No traffic data yet.'),
-				loading: _('Loading…'),
-				error: _('Failed to load traffic data.'),
+				title: T('Traffic usage'),
+				today: T('Today'),
+				yesterday: T('Yesterday'),
+				last7: T('Last 7 days'),
+				last30: T('Last 30 days'),
+				last90: T('Last 90 days'),
+				device: T('Device'),
+				download: T('Download'),
+				upload: T('Upload'),
+				total: T('Total'),
+				share: T('Share'),
+				search: T('Search device'),
+				empty: T('No traffic data yet.'),
+				loading: T('Loading…'),
+				error: T('Failed to load traffic data.'),
 
 				// 设备详情
-				detail: _('Device details'),
-				daily: _('Daily usage'),
-				protocols: _('Protocol distribution'),
-				close: _('Close'),
-				back: _('Back'),
+				detail: T('Device details'),
+				daily: T('Daily usage'),
+				protocols: T('Protocol distribution'),
+				close: T('Close'),
+				back: T('Back'),
 
 				// 设置
-				settings: _('Settings'),
-				save: _('Save'),
-				saved: _('Saved'),
-				storageDir: _('Database directory'),
-				retention: _('Retention (days)'),
-				refreshInterval: _('Auto refresh'),
-				commitInterval: _('Commit interval'),
-				compress: _('Compress old periods'),
-				off: _('Off'),
-				seconds: _('seconds'),
-				refreshHint: _('Refresh interval takes effect after reloading the page.'),
-				dangerZone: _('Danger zone'),
-				resetDb: _('Reset database'),
-				resetConfirm: _('I understand all history will be deleted'),
-				resetNeedConfirm: _('Please tick the confirmation box first.'),
-				resetDone: _('Database cleared.')
+				settings: T('Settings'),
+				save: T('Save'),
+				saved: T('Saved'),
+				storageDir: T('Database directory'),
+				retention: T('Retention (days)'),
+				refreshInterval: T('Auto refresh'),
+				commitInterval: T('Commit interval'),
+				compress: T('Compress old periods'),
+				off: T('Off'),
+				seconds: T('seconds'),
+				refreshHint: T('Refresh interval takes effect after reloading the page.'),
+				dangerZone: T('Danger zone'),
+				resetDb: T('Reset database'),
+				resetConfirm: T('I understand all history will be deleted'),
+				resetNeedConfirm: T('Please tick the confirmation box first.'),
+				resetDone: T('Database cleared.'),
+
+				// 后端返回的语言中立 code —— 具体文案在这里翻译
+				unknownDevice: T('Unknown device'),
+				warnNlbwMissing: T('nlbw command not found, nlbwmon may not be installed.'),
+				warnNoDirectory: T('nlbwmon has no database directory configured.'),
+				warnTmpfs: T('Database directory is on tmpfs ({dir}), history will be lost after reboot.'),
+				warnAcctOff: T('nf_conntrack_acct is disabled, counters may be missing or low.'),
+				warnFullcone: T('A fullcone NAT module was detected, conntrack events may not reach nlbwmon.'),
+				warnNoLocalNet: T('nlbwmon has no local_network configured, no traffic will be counted.'),
+				errDirEmpty: T('Database directory must not be empty.'),
+				errDirTmpfs: T('Database directory must not be on tmpfs (/tmp, /var) or the root directory, otherwise history is lost after reboot.'),
+				errRetention: T('Retention must be between 90 and 3650 days.'),
+				errRefresh: T('Auto refresh must be one of 0 / 10 / 30 / 60.'),
+				errCommit: T('Commit interval must look like 6h or 30m.'),
+				errWrite: T('Failed to write configuration: {detail}'),
+				errConfirm: T('confirm=true is required to clear the database.'),
+				errDirUnavailable: T('Database directory is not configured or not usable, aborted.'),
+				errInvalidMac: T('Invalid MAC address.')
 			}
 		});
 

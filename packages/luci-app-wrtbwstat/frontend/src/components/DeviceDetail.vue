@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { formatBytes, formatShare } from '../utils/format.js';
+import { translate } from '../utils/i18n.js';
 
 // 单设备详情：按日用量柱状 + 协议分布。
 // 数据来自 api.getDevice(mac, range)，与主列表共用同一个时间窗。
@@ -71,7 +72,7 @@ watch(function() { return [ props.mac, props.range ]; }, fetchDetail, { immediat
 	<div class="cbi-section flowlens-detail">
 		<div class="flowlens-detail-head">
 			<div>
-				<span class="flowlens-detail-name">{{ hostname || mac }}</span>
+				<span class="flowlens-detail-name">{{ hostname || label('unknownDevice') }}</span>
 				<span class="flowlens-device-mac">{{ mac }}</span>
 			</div>
 			<button type="button" class="btn cbi-button cbi-button-neutral" @click="emit('close')">
@@ -81,7 +82,7 @@ watch(function() { return [ props.mac, props.range ]; }, fetchDetail, { immediat
 
 		<h3 class="flowlens-detail-title">{{ label('detail') }}</h3>
 
-		<div v-if="error" class="alert-message warning">{{ error }}</div>
+		<div v-if="error" class="alert-message warning">{{ translate(label, error) }}</div>
 		<div v-else-if="loading" class="flowlens-empty">{{ label('loading') }}</div>
 
 		<template v-else>

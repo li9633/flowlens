@@ -78,7 +78,7 @@ function sortBy(key) {
 					@click="emit('select', row)"
 				>
 					<td class="flowlens-device">
-						<span class="flowlens-device-name">{{ row.hostname || row.mac }}</span>
+						<span class="flowlens-device-name">{{ row.unknown_source ? label('unknownDevice') : (row.hostname || row.mac) }}</span>
 						<span class="flowlens-device-mac">{{ row.mac }}</span>
 					</td>
 					<td class="right">{{ formatBytes(row.rx_bytes) }}</td>

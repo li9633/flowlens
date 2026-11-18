@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted, ref } from 'vue';
+import { translate } from '../utils/i18n.js';
 
 // 设置面板：采集参数 + 危险操作。
 // 写操作全部走注入的 api（后端做参数校验），前端只负责收集与呈现结果。
@@ -97,7 +98,7 @@ async function resetDb() {
 			await loadSettings();
 		}
 		else {
-			errors.value = [ r?.message || props.label('error') ];
+			errors.value = [ r?.message ?? props.label('error') ];
 		}
 	}
 	catch (e) {
@@ -121,7 +122,7 @@ onMounted(loadSettings);
 		</div>
 
 		<div v-if="errors.length" class="alert-message warning">
-			<div v-for="e in errors" :key="e">{{ e }}</div>
+			<div v-for="(e, i) in errors" :key="i">{{ translate(label, e) }}</div>
 		</div>
 		<div v-if="notice" class="alert-message success">{{ notice }}</div>
 

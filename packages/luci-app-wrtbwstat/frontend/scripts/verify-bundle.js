@@ -55,7 +55,7 @@ if (!window.WrtbwstatApp || typeof window.WrtbwstatApp.mount !== 'function')
 // 与 LuCI 薄壳 view 注入的 api 保持完全同形
 const api = {
 	getSummary: async () => ({
-		warnings: [ 'test-warning: 数据库目录位于 tmpfs' ],
+		warnings: [ { code: 'warnTmpfs', dir: '/var/lib/nlbwmon' } ],
 		ranges: [
 			{ range: 'today', days: 1, rx_bytes: 1073741824, tx_bytes: 268435456, total_bytes: 1342177280, series: [] },
 			{ range: 'yesterday', days: 1, rx_bytes: 2147483648, tx_bytes: 536870912, total_bytes: 2684354560, series: [] }
@@ -92,6 +92,7 @@ const api = {
 		device: 'Device', download: 'Download', upload: 'Upload', total: 'Total',
 		share: 'Share', search: 'Search device', empty: 'No traffic data yet.',
 		loading: 'Loading…', error: 'Failed to load traffic data.',
+		warnTmpfs: 'Database directory is on tmpfs ({dir}), history will be lost after reboot.',
 		detail: 'Device details', daily: 'Daily usage', protocols: 'Protocol distribution',
 		close: 'Close', back: 'Back', settings: 'Settings', save: 'Save', saved: 'Saved',
 		storageDir: 'Database directory', retention: 'Retention (days)',
@@ -121,7 +122,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 		'渲染出汇总卡片数值': html.includes('1.25 GB'),
 		'渲染出设备行': html.includes('living-room-tv') && html.includes('macbook'),
 		'渲染出占比': /%/.test(html),
-		'渲染出采集告警': html.includes('test-warning'),
+		'渲染出采集告警（code 已翻译且参数替换）': html.includes('tmpfs (/var/lib/nlbwmon)'),
 		'未落入错误分支': !html.includes('Failed to load traffic data')
 	};
 
@@ -180,6 +181,49 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 	if (total > 120) {
 		console.log('FAIL  前端 gzip 总量超出 120 KB 预算');
 		ok = false;
+	}
+
+	// 中文渲染：同一份 bundle，只换 i18n 字典，整页不应残留英文标签
+	const zhI18n = Object.assign({}, api.i18n, {
+		title: '流量统计', today: '今天', yesterday: '昨天', last7: '近 7 天',
+		last30: '近 30 天', last90: '近 90 天', device: '设备', download: '下行',
+		upload: '上行', total: '合计', share: '占比', search: '搜索设备',
+		empty: '暂无流量数据。', loading: '加载中…', error: '加载流量数据失败。',
+		detail: '设备详情', daily: '按日用量', protocols: '协议分布', close: '关闭',
+		settings: '设置', save: '保存', saved: '已保存', storageDir: '数据库目录',
+		retention: '保留天数', refreshInterval: '自动刷新', commitInterval: '落盘间隔',
+		compress: '压缩旧账期', off: '关闭', seconds: '秒',
+		refreshHint: '刷新间隔改动需刷新页面后生效。', dangerZone: '危险操作',
+		resetDb: '清空数据库', resetConfirm: '我确认清空全部历史数据',
+		resetNeedConfirm: '请先勾选确认框。', resetDone: '数据库已清空。',
+		unknownDevice: '未知设备',
+		warnTmpfs: '数据库目录位于 tmpfs（{dir}），重启后历史数据会丢失。',
+		warnNlbwMissing: 'nlbw 命令缺失，nlbwmon 可能未安装。',
+		warnNoDirectory: 'nlbwmon 未配置数据库目录。',
+		warnAcctOff: 'nf_conntrack_acct 未开启，计数可能缺失或偏低。',
+		warnFullcone: '检测到 fullcone NAT 模块。',
+		warnNoLocalNet: 'nlbwmon 未配置 local_network。',
+		errDirEmpty: '数据库目录不能为空。', errDirTmpfs: '数据库目录不能位于 tmpfs。',
+		errRetention: '保留天数需在 90-3650 之间。', errRefresh: '自动刷新只能是 0 / 10 / 30 / 60。',
+		errCommit: '落盘间隔格式应为 6h / 30m 之类。', errWrite: '写入配置失败：{detail}',
+		errConfirm: '需要 confirm=true 才能清空数据库。',
+		errDirUnavailable: '数据库目录未配置或不可用。', errInvalidMac: 'MAC 地址无效。'
+	});
+
+	const el2 = window.document.createElement('div');
+	window.document.body.appendChild(el2);
+	window.WrtbwstatApp.mount(el2, Object.assign({}, api, { i18n: zhI18n }));
+	await wait(300);
+
+	const zh = el2.innerHTML;
+	for (const [ name, pass ] of Object.entries({
+		'中文：标题已翻译': zh.includes('流量统计'),
+		'中文：不再出现英文标题': !zh.includes('Traffic usage'),
+		'中文：表头已翻译': zh.includes('下行') && !zh.includes('Download'),
+		'中文：告警已本地化且参数替换': zh.includes('数据库目录位于 tmpfs（/var/lib/nlbwmon）')
+	})) {
+		console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
+		if (!pass) ok = false;
 	}
 
 	if (!ok) {

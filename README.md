@@ -195,6 +195,26 @@ ubus 对象 `luci.wrtbwstat`，方法与入参见设计文档 5.1：
   - MAC 为 `00:00:00:00:00:00` 的流量（nlbwmon 未解析到源 MAC，多见于 IPv6）单独成一行，标记 `unknown_source: true`。
   - 协议分布优先按 `layer7` 分组；若该 nlbw 版本不支持按复合字段分组，自动回退 `-g mac,proto`，标签变成 `proto 6` 之类。
 
+## 多语言（只维护简体中文与英文）
+
+只做两种语言：**英文作为源码语言**（`_()` 的 msgid），**简体中文**放 `po/zh_Hans/wrtbwstat.po`。
+
+三层机制，缺一层就会出现中英混排：
+
+1. **后端不写自然语言**。告警与校验错误只回 `code` + 参数，例如
+   `{ code: 'warnTmpfs', dir: '/var/lib/nlbwmon' }`、`'errRetention'`，由前端翻译。
+   否则中文文案会直接漏到英文界面里（这正是最初"一半中文一半英文"的根因之一）。
+2. **po → lmo**。打包时用 `po2lmo` 编译，安装到 `/usr/lib/lua/luci/i18n/`。
+   由于固件语言目录命名不一致（iStoreOS 用 `zh-cn`、上游用 `zh_Hans`），**两个名字各装一份**。
+3. **视图内置词典兜底**。`overview.js` 里带一份中文词典，`T()` 先问 LuCI 的 `_()`，
+   翻译未生效时按 `<html lang>` 决定是否用内置中文。这样即使某台机器没有加载 `.lmo`，
+   页面也只会是"全中文"或"全英文"，不会混排。
+
+新增文案时三处都要改：`po/zh_Hans/wrtbwstat.po`、`overview.js` 的 i18n 表（英文源串）、
+`overview.js` 的内置 `ZH` 词典；若新增后端 code，还要在 i18n 表里加同名 key。
+
+`npm run verify` 会分别用英文与中文各渲染一次，并断言中文页里不出现 `Traffic usage`、`Download` 等英文残留。
+
 ### 自动化测试（已在 OpenWrt 容器内跑通）
 
 ```sh

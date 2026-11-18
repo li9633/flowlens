@@ -40,6 +40,29 @@ put "$SRC/root/usr/share/rpcd/ucode/luci.wrtbwstat"                usr/share/rpc
 put "$SRC/root/usr/share/rpcd/acl.d/luci-app-wrtbwstat.json"       usr/share/rpcd/acl.d/luci-app-wrtbwstat.json 0644
 put "$SRC/root/usr/share/luci/menu.d/luci-app-wrtbwstat.json"      usr/share/luci/menu.d/luci-app-wrtbwstat.json 0644
 
+# 翻译：po -> lmo（与 luci.mk 做的事一致）。luci.mk 会把翻译单独打成
+# luci-i18n-* 包，这里直接并进主包，减少一次安装步骤。
+PO2LMO=${PO2LMO:-po2lmo}
+if command -v "$PO2LMO" >/dev/null 2>&1; then
+	for po in "$SRC"/po/*/*.po; do
+		[ -f "$po" ] || continue
+		lang=$(basename "$(dirname "$po")")
+		dom=$(basename "$po" .po)
+		# iStoreOS/旧版 LuCI 用 zh-cn，上游用 zh_Hans，两个名字都装一份
+		case "$lang" in
+			zh_Hans|zh_Hant) extra=$(echo "$lang" | sed 's/zh_Hans/zh-cn/; s/zh_Hant/zh-tw/') ;;
+			*) extra="" ;;
+		esac
+		"$PO2LMO" "$po" "$WORK/$dom.$lang.lmo"
+		put "$WORK/$dom.$lang.lmo" "usr/lib/lua/luci/i18n/$dom.$lang.lmo" 0644
+		if [ -n "$extra" ]; then
+			put "$WORK/$dom.$lang.lmo" "usr/lib/lua/luci/i18n/$dom.$extra.lmo" 0644
+		fi
+	done
+else
+	echo "警告: 未找到 po2lmo（可设 PO2LMO=/path/to/po2lmo），本次不打包翻译" >&2
+fi
+
 SIZE=$(du -sk "$D" | cut -f1)
 
 cat > "$C/control" <<EOF

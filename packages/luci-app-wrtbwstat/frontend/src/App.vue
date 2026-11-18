@@ -5,6 +5,7 @@ import SummaryCards from './components/SummaryCards.vue';
 import DeviceTable from './components/DeviceTable.vue';
 import DeviceDetail from './components/DeviceDetail.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
+import { translate } from './utils/i18n.js';
 
 // FlowLens 根组件
 //
@@ -118,7 +119,7 @@ onMounted(async function() {
 
 		<!-- 采集链路风险：数据库目录在 tmpfs、conntrack acct 未开、fullcone 冲突等 -->
 		<ul v-if="warnings.length" class="flowlens-warnings">
-			<li v-for="w in warnings" :key="w">{{ w }}</li>
+			<li v-for="(w, i) in warnings" :key="i">{{ translate(t, w) }}</li>
 		</ul>
 
 		<SummaryCards
