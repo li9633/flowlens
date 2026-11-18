@@ -4,10 +4,10 @@ FlowLens 是一个面向 OpenWrt / iStoreOS 的按设备流量统计插件项目
 
 ## 当前状态
 
-- 设计：v2 定稿（Vue 3 + Vite 前端、ucode 后端、nlbwmon 采集、apk 打包）。
+- 设计：v2 定稿（Vue 3 + Vite 前端、ucode 后端、nlbwmon 采集）。打包双轨：apk 主推，ipk 维护至 24.10 EOL。
 - 后端：M1 已实现——六个 ubus 方法全部落地，逐日读取 nlbw 账期并聚合，带历史账期缓存与采集告警。已在 OpenWrt rootfs 容器内用 mock nlbw 跑通 144 条断言。
 - 前端：M2a 已完成——`app.js` / `app.css` 已构建入库，`npm run verify` 在 jsdom 中实测挂载通过，gzip 合计 29 KB。
-- 未完成：真机确认 `nlbw` 实际输出列名（容器用的是 mock）；25.12 LuCI 联调（M2b）；apk 打包（M3）。
+- 未完成：真机确认 `nlbw` 实际输出列名（容器用的是 mock）；LuCI 联调（M2b）；SDK 实际出包（M3）。
 
 ## 目录结构
 
@@ -86,6 +86,70 @@ npm run verify       # 在 jsdom 中挂载产物并断言渲染，同时检查�
 - 产物必须是 IIFE 而非 ES Module：LuCI 的自定义模块加载器与 ESM 不兼容，view 只能用同源 `<script>` 注入。
 - 模板全部预编译（`vue.runtime.esm-bundler.js`），产物中不含 `new Function`，未来 CSP 落地无需放宽策略。
 
+## 打包：apk 与 ipk 双轨
+
+**策略**：apk 为主推，ipk 维护到 OpenWrt 官方停止支持 24.10 为止。两条线共用同一份源码、同一份 Makefile——出什么格式由 SDK 的 `CONFIG_USE_APK` 决定，代码里没有任何版本分支。
+
+```sh
+# 25.12+ / main SDK（CONFIG_USE_APK=y）→ 产出 .apk
+sh scripts/build-in-sdk.sh ~/sdk/openwrt-sdk-25.12
+
+# 24.10 / iStoreOS 对应分支 SDK → 产出 .ipk
+sh scripts/build-in-sdk.sh ~/sdk/openwrt-sdk-24.10
+```
+
+脚本会校验 SDK、把 `packages/` 复制到 `package/flowlens/`、编译两个包并打印产物路径。前提是 SDK 里已 `./scripts/feeds update luci && ./scripts/feeds install -a -p luci`，否则 `luci.mk` 不存在（也可以用 `LUCI_MK=...` 指定其他位置）。
+
+### 实测记录（2026-11-18）
+
+| 包 | 格式 | 结果 |
+| --- | --- | --- |
+| `wrtbwstat` | ipk | ✅ 24.10.5 SDK 实际产出 `wrtbwstat_0.1.0-r1_all.ipk`（3.1 KB） |
+| `luci-app-wrtbwstat` | ipk | ⚠️ 未产出，卡在 SDK 环境（见下） |
+| 两者 | apk | ⚠️ 未产出：25.12 尚未发布正式版；snapshots SDK 下载 5 MB/5 分钟，网络不可用 |
+
+`wrtbwstat` 的 ipk 已核验：
+
+```text
+control: Package: wrtbwstat / Version: 0.1.0-r1 / Depends: libc, nlbwmon, rpcd-mod-ucode
+         Architecture: all / License: Apache-2.0
+conffiles: /etc/config/wrtbwstat
+data: /etc/config/wrtbwstat(0600) /etc/sysctl.d/99-wrtbwstat.conf(0644)
+      /etc/uci-defaults/80_wrtbwstat(0755)
+```
+
+`luci-app-wrtbwstat` 在本环境无法编译的原因：`luci.mk` 强制 `luci-base` 的 host 编译，而 `luci-base` → `lucihttp` → 需要 `libucode` 的头文件；OpenWrt SDK **不包含核心包源码**（`package/` 下只有 kernel 与 toolchain），`staging_dir/target-*/usr/include` 是空的。这不是本仓库的问题——任何 LuCI 应用在裸 SDK 里都会撞上同一堵墙。出应用包需要：
+
+- 完整 buildroot（`git clone openwrt` + feeds，`make package/flowlens/luci-app-wrtbwstat/compile`），或
+- 一个 `staging_dir` 里带 libucode 头文件的 SDK。
+
+`wrtbwstat` 能出包正因为它不依赖 `luci.mk`，只 `include $(INCLUDE_DIR)/package.mk`。
+
+安装：
+
+```sh
+apk add --allow-untrusted ./wrtbwstat-0.1.0-r1.apk ./luci-app-wrtbwstat-0.1.0-r1.apk   # 25.12+
+opkg install ./wrtbwstat_0.1.0-1_all.ipk ./luci-app-wrtbwstat_0.1.0-1_all.ipk          # 24.10
+```
+
+### 两条线的差异与兼容性
+
+| 项 | 25.12+（apk，主推） | 24.10（ipk，维护中） |
+| --- | --- | --- |
+| 包管理器 | apk | opkg |
+| 防火墙 | firewall4 / nftables | firewall4 / nftables（22.03 起） |
+| 后端运行时 | ucode + `rpcd-mod-ucode` | 同左（24.10 已具备） |
+| LuCI 客户端 | 浏览器 JS（`require rpc` / `poll` / `view`） | 同左，薄壳 view 无需另写 |
+| `/etc/sysctl.d/*.conf` | 支持 | 支持（18.06 起） |
+| 预编译产物 | app.js / app.css | 同一份，无差异 |
+| 本项目的差异处理 | 无 | 仅打包格式不同 |
+
+因为两个包都是 `PKGARCH:=all` 的纯配置 / 纯脚本包，产物内容一致，区别只在包格式与依赖解析方式。`wrtbwstat` 依赖 `+nlbwmon +rpcd-mod-ucode`，`luci-app-wrtbwstat` 依赖 `+luci-base +wrtbwstat`，两条线同名可解析。
+
+24.10 EOL 后：删除本节 ipk 部分、`scripts/build-in-sdk.sh` 的格式探测与 README 的技术基线，代码无需改动（本就无版本分支）。
+
+
+
 ## 接口契约
 
 ubus 对象 `luci.wrtbwstat`，方法与入参见设计文档 5.1：
@@ -141,6 +205,15 @@ IMAGE=docker.1panel.live/openwrt/rootfs:x86-64 sh tests/run-backend-tests.sh
 
 ### 真机冒烟测试（尚未执行）
 
+**前置条件：路由器必须已安装 `nlbwmon`**（`nlbw` 命令来自该包）。装包时 `wrtbwstat` 的 `DEPENDS:=+nlbwmon` 会自动带入，但手工验证阶段需先自己装：
+
+```sh
+opkg update && opkg install nlbwmon      # opkg 系统
+apk update  && apk add nlbwmon           # apk 系统（25.12+）
+```
+
+未安装时后端不会报错，而是返回空数据并在 `get_summary` / `get_settings` 的 `warnings` 里给出「nlbw 命令缺失」，页面顶部会显示告警条。
+
 容器用的是 mock `nlbw`，**真实 `nlbw -c json` 的列名仍需在设备上确认一遍**。装包后按顺序执行：
 
 ```sh
@@ -171,6 +244,7 @@ ubus call luci.wrtbwstat get_device '{"mac":"aa:bb:cc:dd:ee:ff","range":"last7"}
 2. **ucode 后端归属**：文档 5.3 把 `rpcd/ucode/luci.wrtbwstat` 放在 `luci-app-wrtbwstat` 包内，此处照做；若希望"只装后端不装界面"，可平移到 `wrtbwstat` 包。
 3. **命名统一**：文档 5.2.2 示例中前端入口写作 `window.UsagestatApp`、挂载点 `usagestat-app`，与包名 `wrtbwstat` 不一致。骨架统一为 `window.WrtbwstatApp` / `#wrtbwstat-app`。
 4. **新增配置项**：文档只提存储目录与保留期，骨架额外固化了 `commit_interval`、`compress`、`refresh_interval`（`/etc/config/wrtbwstat`），对应 4.3 节与 FR-07。
+5. **打包策略**：文档 5.4 写的是"不产出 ipk，不维护 24.10 分支"。产品决定调整为主推 apk、同时保留 ipk 至 24.10 EOL，因为目标设备（iStoreOS 分支）当前仍是 opkg。已确认两条线不需要代码分叉：ucode + `rpcd-mod-ucode`、firewall4、`/etc/sysctl.d`、LuCI 浏览器端 JS 在 24.10 均已具备。
 
 ## 待办
 
@@ -181,7 +255,10 @@ ubus call luci.wrtbwstat get_device '{"mac":"aa:bb:cc:dd:ee:ff","range":"last7"}
 - [ ] M1-verify-device：真机确认 `nlbw -c json` 实际列名与 `-g mac,layer7` 是否可分组。
 - [x] M2a：依赖安装与构建跑通，`app.js` / `app.css` / `package-lock.json` 入库；`npm run verify` 在 jsdom 中实测挂载通过。
 - [ ] M2b：25.12 LuCI 中联调薄壳 view，验证会话、ACL、poll 生命周期。
-- [ ] M3：SDK 构建 apk，编写安装与排错说明。
+- [x] M3-ipk：24.10.5 SDK 产出 `wrtbwstat` 的 ipk 并核验 control / conffiles / 文件权限。
+- [ ] M3-ipk-app：`luci-app-wrtbwstat` 的 ipk 需完整 buildroot（裸 SDK 缺 libucode 头文件）。
+- [ ] M3-apk：25.12 正式版发布后用其 SDK 出 apk；当前 snapshots SDK 下载不可用。
+- [ ] M3-doc：编写安装与排错说明（apk / opkg 两套）。
 
 ## 技术基线
 
@@ -191,6 +268,6 @@ ubus call luci.wrtbwstat get_device '{"mac":"aa:bb:cc:dd:ee:ff","range":"last7"}
 | 采集 | nlbwmon（conntrack netlink），按日账期持久化 |
 | 后端 | ucode + rpcd（`rpcd-mod-ucode`） |
 | 前端 | Vue 3 + Vite（runtime-only，IIFE 产物），挂载在 LuCI view 中 |
-| 打包 | apk（`CONFIG_USE_APK=y`），不维护 ipk 分支 |
+| 打包 | apk（`CONFIG_USE_APK=y`，主推）+ ipk（24.10，维护至 EOL），同一份 Makefile |
 
 本插件不向 nftables 写入任何规则，也不调用 iptables / ip6tables。

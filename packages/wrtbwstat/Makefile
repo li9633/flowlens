@@ -6,7 +6,10 @@
 # 并确保 conntrack accounting 开启。本包不含任何界面与 rpcd 接口。
 # 依据：doc/OpenWrt流量统计插件设计文档_v2.md 第 4.3、5.3 节
 #
-# 目标：OpenWrt 25.12+ / iStoreOS 对应分支（firewall4 + apk）
+# 打包格式：同一份 Makefile 双轨出包，由构建系统决定
+#   OpenWrt 25.12+（CONFIG_USE_APK=y） -> .apk（主推）
+#   OpenWrt 24.10 / iStoreOS           -> .ipk（维护至 24.10 EOL）
+# 本包为纯配置包（PKGARCH:=all），两条线的产物内容一致。
 
 include $(TOPDIR)/rules.mk
 
@@ -50,7 +53,7 @@ define Package/wrtbwstat/install
 	$(INSTALL_CONF) ./root/etc/config/wrtbwstat $(1)/etc/config/wrtbwstat
 
 	$(INSTALL_DIR) $(1)/etc/sysctl.d
-	$(INSTALL_CONF) ./root/etc/sysctl.d/99-wrtbwstat.conf $(1)/etc/sysctl.d/99-wrtbwstat.conf
+	$(INSTALL_DATA) ./root/etc/sysctl.d/99-wrtbwstat.conf $(1)/etc/sysctl.d/99-wrtbwstat.conf
 endef
 
 $(eval $(call BuildPackage,wrtbwstat))
