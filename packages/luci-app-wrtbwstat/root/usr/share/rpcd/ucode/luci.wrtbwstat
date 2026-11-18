@@ -192,6 +192,21 @@ function range_days(range) {
 	return RANGES[range] ?? 1;
 }
 
+/**
+ * 时间窗对应的自然日列表。
+ *
+ * yesterday 是单日窗口，不能走 day_list(1) —— 后者返回的是「以今天为末位的 1 天」，
+ * 也就是今天。其余窗口都以今天为末位向前取 N 天。
+ */
+function days_for_range(range) {
+	if (range == 'yesterday') {
+		let d = day_at(1);
+		return d ? [ d ] : [];
+	}
+
+	return day_list(range_days(range));
+}
+
 function normalize_range(range) {
 	return (type(range) == 'string' && RANGES[range] != null) ? range : 'today';
 }
@@ -644,7 +659,7 @@ methods.get_devices = {
 		let range = normalize_range(request.args?.range);
 		let sortBy = normalize_sort(request.args?.sort);
 		let keyword = trim(request.args?.keyword ?? '');
-		let days = day_list(range_days(range));
+		let days = days_for_range(range);
 		let result = aggregate(days);
 		let dir = device_directory();
 
@@ -687,7 +702,7 @@ methods.get_device = {
 		if (!mac)
 			return { mac: null, hostname: null, range, error: { code: 'errInvalidMac' }, days: [], protocols: [] };
 
-		let days = day_list(range_days(range));
+		let days = days_for_range(range);
 		let series = [];
 		let protos = {};
 		let protoField = null;

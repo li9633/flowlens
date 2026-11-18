@@ -57,6 +57,14 @@ if (phase == 'read') {
 	check('summary.days_with_data', sum.days_with_data, 90);
 	check('summary.range_echo', sum.range, 'last7');
 
+	printf("\n### get_devices(yesterday) 的账期\n");
+	let ydev = methods.get_devices.call({ args: { range: 'yesterday', sort: 'total', keyword: '' } });
+	printf("  days=%s total=%d count=%d\n", ydev.days[0], ydev.total_bytes, ydev.device_count);
+	check('devices.yesterday.days_len', length(ydev.days), 1);
+	check('devices.yesterday.day', ydev.days[0], sum.ranges[1].series[0].date);
+	check('devices.yesterday.not_today', ydev.days[0] != sum.ranges[0].series[0].date, true);
+	check('devices.yesterday.total (单日)', ydev.total_bytes, 1661);
+
 	printf("\n### get_devices(last7, sort=total)\n");
 	let dv = methods.get_devices.call({ args: { range: 'last7', sort: 'total', keyword: '' } });
 	printf("  total=%d count=%d\n", dv.total_bytes, dv.device_count);
