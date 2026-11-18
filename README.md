@@ -5,15 +5,23 @@ FlowLens 是一个面向 OpenWrt / iStoreOS 的按设备流量统计插件项目
 ## 当前状态
 
 - 设计：v2 定稿（Vue 3 + Vite 前端、ucode 后端、nlbwmon 采集、apk 打包）。
-- 后端：M1 已实现——六个 ubus 方法全部落地，逐日读取 nlbw 账期并聚合，带历史账期缓存与采集告警。
+- 后端：M1 已实现——六个 ubus 方法全部落地，逐日读取 nlbw 账期并聚合，带历史账期缓存与采集告警。已在 OpenWrt rootfs 容器内用 mock nlbw 跑通 144 条断言。
 - 前端：M2a 已完成——`app.js` / `app.css` 已构建入库，`npm run verify` 在 jsdom 中实测挂载通过，gzip 合计 29 KB。
-- 未完成：**后端尚未在真机跑过**（本机无 ucode 运行环境，WSL 被安全策略禁用），需按"路由器冒烟测试"验证；25.12 LuCI 联调（M2b）；apk 打包（M3）。
+- 未完成：真机确认 `nlbw` 实际输出列名（容器用的是 mock）；25.12 LuCI 联调（M2b）；apk 打包（M3）。
 
 ## 目录结构
 
 ```text
 flowlens/
 ├── doc/                                  # 设计文档（v1 / v2），随仓库自包含
+├── tests/
+│   ├── run-backend-tests.sh              # 后端测试入口（OpenWrt rootfs 容器）
+│   └── backend/
+│       ├── verify.sh                     # 只读/写三阶段验证
+│       ├── driver.uc                     # 断言驱动（追加在插件源码之后执行）
+│       ├── mock-nlbw                     # nlbw 桩，产出固定流量
+│       ├── test-uci-defaults.sh          # 安装脚本落盘验证
+│       └── fixtures/                     # nlbwmon / wrtbwstat 的 UCI 配置
 ├── packages/
 │   ├── wrtbwstat/                        # 数据面配置包：nlbwmon 日账期基线
 │   │   ├── Makefile                      # DEPENDS:=+nlbwmon +rpcd-mod-ucode
@@ -104,9 +112,36 @@ ubus 对象 `luci.wrtbwstat`，方法与入参见设计文档 5.1：
   - MAC 为 `00:00:00:00:00:00` 的流量（nlbwmon 未解析到源 MAC，多见于 IPv6）单独成一行，标记 `unknown_source: true`。
   - 协议分布优先按 `layer7` 分组；若该 nlbw 版本不支持按复合字段分组，自动回退 `-g mac,proto`，标签变成 `proto 6` 之类。
 
-### 路由器冒烟测试
+### 自动化测试（已在 OpenWrt 容器内跑通）
 
-后端**尚未在真机验证过**，装包后按顺序执行：
+```sh
+sh tests/run-backend-tests.sh
+# 国内拉不动 Docker Hub 时：
+IMAGE=docker.1panel.live/openwrt/rootfs:x86-64 sh tests/run-backend-tests.sh
+```
+
+把仓库根挂进 `openwrt/rootfs:x86-64`，用 mock `nlbw` 产出**固定流量**（每日 rx=1510 / tx=151），因此每个数字都能预先算出。三组用例共 144 条断言：
+
+| 用例 | 覆盖 |
+| --- | --- |
+| `tests/backend/verify.sh` | 五窗口总量与 series 长度、MAC 归并、别名/DHCP/MAC 三级回退、排序、关键词、协议分布、`set_settings` 五种拒绝路径与生效、`reset_database`、缓存命中的调用次数（冷 104 → 热 9） |
+| 同上 `FL_NLBW_BREAK_LAYER7=1` | `-g mac,layer7` 失败时回退 `-g mac,proto` 的分支 |
+| `tests/backend/test-uci-defaults.sh` | 安装脚本把 tmpfs 目录改为持久化目录、写入日账期/保留代/commit/compress、补 `local_network` |
+
+> 为什么用 OpenWrt rootfs 而不是 Ubuntu：验证需要真实 `ucode` 解释器及自带 `fs`/`uci` 模块。Ubuntu 源里没有 `ucode` 包。
+
+### M1 实测发现并修复的 4 个问题
+
+这几个都是"看起来对、跑起来错"，且大多会静默返回错误数据而非报错：
+
+1. **`int / int` 是整除**：`7700 / 11627` 得到 `0`，导致 `share` 全为 0。必须 `* 1.0` 转 double。
+2. **`sort()` 比较器必须返回数值**：返回布尔时比较被视为"相等"，数组**完全不排序**（实测 `[3,1,2]` 原样返回）。排序用 `b - a`，字符串用比较函数返回 -1/0/1。
+3. **`split(str)` 省略分隔符返回 `null`**，不是按空白拆分——DHCP 租约全部解析失败。需显式给分隔符并过滤空字段。
+4. **按"值当下标"取数组元素**（`REFRESH_CHOICES[60]`、`SORTS[sort]`）：数组只有 4 个元素，索引 60 恒为 null，导致刷新间隔校验永远失败、`sort=rx/hostname/mac` 全部静默回退成 `total`。改用显式成员判断。
+
+### 真机冒烟测试（尚未执行）
+
+容器用的是 mock `nlbw`，**真实 `nlbw -c json` 的列名仍需在设备上确认一遍**。装包后按顺序执行：
 
 ```sh
 # 1. 对象是否注册（rpcd 需要重载才能看到新脚本）
@@ -128,7 +163,7 @@ ubus call luci.wrtbwstat get_devices '{"range":"last7","sort":"total","keyword":
 ubus call luci.wrtbwstat get_device '{"mac":"aa:bb:cc:dd:ee:ff","range":"last7"}'
 ```
 
-第 3 步的输出直接决定解析是否需要调整：若 `columns` 里没有 `rx_bytes` / `mac` 这两个名字，把实际输出贴回来，改 `nlbw_query()` 的列名映射即可。
+第 3 步的输出直接决定解析是否要调整：若 `columns` 里没有 `rx_bytes` / `mac` 这两个名字，把实际输出贴回来，改 `nlbw_query()` 的列名映射即可。
 
 ## 与设计文档的差异（需确认）
 
@@ -142,7 +177,8 @@ ubus call luci.wrtbwstat get_device '{"mac":"aa:bb:cc:dd:ee:ff","range":"last7"}
 - [ ] M0：在目标设备验证 `conntrack -E` 事件、nlbwmon 落库与 fullcone 冲突，回填 90 天体积实测。
 - [x] M1：`enumerate_days` / `read_day`（`nlbw -c json -n -t`）/ `aggregate` / `resolve_hostname` / `day_total` / 缓存。
 - [x] M1：`set_settings` 校验（拒绝 tmpfs 目录、保留期、刷新间隔白名单）与 `reset_database`。
-- [ ] M1-verify：按"路由器冒烟测试"在真机跑一遍，确认 `nlbw -c json` 的列名与 `-g mac,layer7` 是否可分组。
+- [x] M1-verify：OpenWrt rootfs 容器内 144 条断言全通过（含 layer7 回退与 uci-defaults），修掉 4 个 ucode 语义问题。
+- [ ] M1-verify-device：真机确认 `nlbw -c json` 实际列名与 `-g mac,layer7` 是否可分组。
 - [x] M2a：依赖安装与构建跑通，`app.js` / `app.css` / `package-lock.json` 入库；`npm run verify` 在 jsdom 中实测挂载通过。
 - [ ] M2b：25.12 LuCI 中联调薄壳 view，验证会话、ACL、poll 生命周期。
 - [ ] M3：SDK 构建 apk，编写安装与排错说明。

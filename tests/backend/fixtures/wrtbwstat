@@ -1,0 +1,10 @@
+config settings 'settings'
+	option storage_dir '/srv/nlbw'
+	option retention_days '95'
+	option commit_interval '6h'
+	option compress '1'
+	option refresh_interval '30'
+
+config alias
+	option mac 'aa:bb:cc:00:11:01'
+	option name '客厅电视'

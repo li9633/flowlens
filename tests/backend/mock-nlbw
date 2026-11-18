@@ -1,0 +1,54 @@
+#!/bin/sh
+# FlowLens 后端验证用的 nlbw 桩
+#
+# 真实 nlbw：-c json 输出 {"columns":[...],"data":[[...],...]}，列集合随 -g 变化；
+# -t 读指定日期的归档库。这里对任意日期返回同一份 fixture，便于用固定数字验证：
+#   每日全网 rx = 1000 + 500 + 10 = 1510，tx = 100 + 50 + 1 = 151
+#
+# FL_NLBW_BREAK_LAYER7=1 时 -g mac,layer7 报错，用于验证回退到 -g mac,proto 的分支。
+
+group=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-g) group="$2"; shift 2 ;;
+		-t) shift 2 ;;
+		-o) shift 2 ;;
+		*)  shift ;;
+	esac
+done
+
+# 记录调用次数，供缓存效果断言使用
+[ -f /tmp/nlbw.calls ] && echo "$group" >> /tmp/nlbw.calls
+
+if [ "$group" = "mac,layer7" ] && [ -n "$FL_NLBW_BREAK_LAYER7" ]; then
+	echo "nlbw: invalid column 'layer7' for grouping" >&2
+	exit 1
+fi
+
+case "$group" in
+	mac,layer7)
+		cols='["mac","layer7","conns","rx_bytes","rx_pkts","tx_bytes","tx_pkts"]'
+		rows='["aa:bb:cc:00:11:01","HTTPS",6,700,70,70,7],
+		      ["aa:bb:cc:00:11:01","HTTP",4,300,30,30,3],
+		      ["aa:bb:cc:00:11:02","HTTPS",5,500,50,50,5],
+		      ["00:00:00:00:00:00","other",1,10,1,1,1]'
+		;;
+	mac,proto)
+		cols='["mac","proto","conns","rx_bytes","rx_pkts","tx_bytes","tx_pkts"]'
+		rows='["aa:bb:cc:00:11:01",6,10,1000,100,100,10],
+		      ["aa:bb:cc:00:11:02",17,5,500,50,50,5],
+		      ["00:00:00:00:00:00",1,1,10,1,1,1]'
+		;;
+	mac)
+		cols='["mac","conns","rx_bytes","rx_pkts","tx_bytes","tx_pkts"]'
+		rows='["aa:bb:cc:00:11:01",10,1000,100,100,10],
+		      ["aa:bb:cc:00:11:02",5,500,50,50,5],
+		      ["00:00:00:00:00:00",1,10,1,1,1]'
+		;;
+	*)
+		echo "nlbw: unsupported grouping '$group'" >&2
+		exit 1
+		;;
+esac
+
+printf '{"columns":%s,"data":[%s]}\n' "$cols" "$rows"
