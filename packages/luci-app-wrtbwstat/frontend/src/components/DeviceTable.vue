@@ -34,6 +34,22 @@ const rows = computed(function() {
 	});
 });
 
+// 有主机名：标题=名称，副标题=MAC
+// 无主机名：标题=MAC，副标题=IP（拿不到 IP 就只显示 MAC）
+function title(row) {
+	if (row.unknown_source)
+		return props.label('unknownDevice');
+
+	return row.hostname || row.mac;
+}
+
+function subtitle(row) {
+	if (row.unknown_source)
+		return row.mac;
+
+	return row.hostname ? row.mac : (row.ip || '');
+}
+
 function sortBy(key) {
 	if (key === props.sort)
 		return;
@@ -78,8 +94,8 @@ function sortBy(key) {
 					@click="emit('select', row)"
 				>
 					<td class="flowlens-device">
-						<span class="flowlens-device-name">{{ row.unknown_source ? label('unknownDevice') : (row.hostname || row.mac) }}</span>
-						<span class="flowlens-device-mac">{{ row.mac }}</span>
+						<span class="flowlens-device-name">{{ title(row) }}</span>
+						<span v-if="subtitle(row)" class="flowlens-device-mac">{{ subtitle(row) }}</span>
 					</td>
 					<td class="right">{{ formatBytes(row.rx_bytes) }}</td>
 					<td class="right">{{ formatBytes(row.tx_bytes) }}</td>

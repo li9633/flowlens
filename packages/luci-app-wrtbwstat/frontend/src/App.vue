@@ -36,7 +36,7 @@ const selected = ref(null);
 const showSettings = ref(false);
 
 function onSelect(device) {
-	selected.value = { mac: device.mac, hostname: device.hostname };
+	selected.value = { mac: device.mac, hostname: device.hostname, ip: device.ip };
 }
 
 // 设置变更（改目录 / 清库）后需要重新拉数据
@@ -154,6 +154,7 @@ onMounted(async function() {
 			:api="api"
 			:mac="selected.mac"
 			:hostname="selected.hostname"
+			:ip="selected.ip || ''"
 			:range="range"
 			:label="t"
 			@close="selected = null"

@@ -10,11 +10,17 @@ const props = defineProps({
 	api: { type: Object, required: true },
 	mac: { type: String, required: true },
 	hostname: { type: String, default: '' },
+	ip: { type: String, default: '' },
 	range: { type: String, required: true },
 	label: { type: Function, required: true }
 });
 
 const emit = defineEmits([ 'close' ]);
+
+// 与列表保持同一规则：有名称时副标题是 MAC，没有名称时副标题是 IP
+const subtitle = computed(function() {
+	return props.hostname ? props.mac : (props.ip || '');
+});
 
 const detail = ref(null);
 const loading = ref(false);
@@ -72,8 +78,8 @@ watch(function() { return [ props.mac, props.range ]; }, fetchDetail, { immediat
 	<div class="cbi-section flowlens-detail">
 		<div class="flowlens-detail-head">
 			<div>
-				<span class="flowlens-detail-name">{{ hostname || label('unknownDevice') }}</span>
-				<span class="flowlens-device-mac">{{ mac }}</span>
+				<span class="flowlens-detail-name">{{ hostname || mac }}</span>
+				<span v-if="subtitle" class="flowlens-device-mac">{{ subtitle }}</span>
 			</div>
 			<button type="button" class="btn cbi-button cbi-button-neutral" @click="emit('close')">
 				{{ label('close') }}

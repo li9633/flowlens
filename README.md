@@ -192,6 +192,7 @@ ubus 对象 `luci.wrtbwstat`，方法与入参见设计文档 5.1：
 - **成本**：`nlbw` 一次只能读一个账期，`get_summary` 要覆盖近 90 天，首调用会有 90 次进程派生（约 1-3 秒，视设备而定），之后命中缓存。`get_devices(range)` 只读该窗口所需的日数。
 - **已知取舍**：
   - `first_seen` / `last_seen` 无法从账期摘要还原，返回 `null`，改用 `days_active`（窗口内有流量的天数）表达。
+  - **设备标识**：`hostname` 取不到时返回空串（而不是回退成 MAC），并另给 `ip` 字段（DHCP 租约优先、其次 `/proc/net/arp`）。前端据此决定排版——有名称时「名称 + MAC 副标题」，无名称时「MAC 标题 + IP 副标题」，避免同一串 MAC 上下重复两遍。关键词搜索同时匹配名称、MAC 与 IP。
   - MAC 为 `00:00:00:00:00:00` 的流量（nlbwmon 未解析到源 MAC，多见于 IPv6）单独成一行，标记 `unknown_source: true`。
   - 协议分布优先按 `layer7` 分组；若该 nlbw 版本不支持按复合字段分组，自动回退 `-g mac,proto`，标签变成 `proto 6` 之类。
 

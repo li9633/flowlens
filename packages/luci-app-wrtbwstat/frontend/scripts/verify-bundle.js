@@ -63,8 +63,9 @@ const api = {
 	}),
 	getDevices: async () => ({
 		devices: [
-			{ mac: 'aa:bb:cc:00:11:01', hostname: 'living-room-tv', rx_bytes: 1073741824, tx_bytes: 104857600, total_bytes: 1178599424 },
-			{ mac: 'aa:bb:cc:00:11:02', hostname: 'macbook', rx_bytes: 268435456, tx_bytes: 67108864, total_bytes: 335544320 }
+			{ mac: 'aa:bb:cc:00:11:01', hostname: 'living-room-tv', ip: '192.168.2.50', unknown_source: false, rx_bytes: 1073741824, tx_bytes: 104857600, total_bytes: 1178599424 },
+			{ mac: 'aa:bb:cc:00:11:02', hostname: '', ip: '192.168.2.51', unknown_source: false, rx_bytes: 268435456, tx_bytes: 67108864, total_bytes: 335544320 },
+			{ mac: '00:00:00:00:00:00', hostname: '', ip: null, unknown_source: true, rx_bytes: 1048576, tx_bytes: 0, total_bytes: 1048576 }
 		]
 	}),
 	getDevice: async () => ({
@@ -93,6 +94,7 @@ const api = {
 		share: 'Share', search: 'Search device', empty: 'No traffic data yet.',
 		loading: 'Loading…', error: 'Failed to load traffic data.',
 		warnTmpfs: 'Database directory is on tmpfs ({dir}), history will be lost after reboot.',
+		unknownDevice: 'Unknown device',
 		detail: 'Device details', daily: 'Daily usage', protocols: 'Protocol distribution',
 		close: 'Close', back: 'Back', settings: 'Settings', save: 'Save', saved: 'Saved',
 		storageDir: 'Database directory', retention: 'Retention (days)',
@@ -120,7 +122,10 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 		'挂载后渲染出标题': html.includes('Traffic usage'),
 		'渲染出 5 个时间窗按钮': (html.match(/role="tab"/g) || []).length === 5,
 		'渲染出汇总卡片数值': html.includes('1.25 GB'),
-		'渲染出设备行': html.includes('living-room-tv') && html.includes('macbook'),
+		'渲染出设备行': html.includes('living-room-tv') && html.includes('aa:bb:cc:00:11:02'),
+		'有主机名：MAC 作副标题（只出现一次）': (html.match(/aa:bb:cc:00:11:01/g) || []).length === 1,
+		'无主机名：标题用 MAC、副标题用 IP': html.includes('192.168.2.51') && (html.match(/aa:bb:cc:00:11:02/g) || []).length === 1,
+		'未知来源设备显示本地化名称': html.includes('Unknown device'),
 		'渲染出占比': /%/.test(html),
 		'渲染出采集告警（code 已翻译且参数替换）': html.includes('tmpfs (/var/lib/nlbwmon)'),
 		'未落入错误分支': !html.includes('Failed to load traffic data')

@@ -326,7 +326,7 @@ function alias_map() {
 	return map;
 }
 
-function lease_map() {
+function lease_info() {
 	let map = {};
 	let raw = readfile('/tmp/dhcp.leases') ?? '';
 
@@ -335,22 +335,55 @@ function lease_map() {
 		let f = split_ws(line);
 		if (length(f) >= 4) {
 			let mac = normalize_mac(f[1]);
-			if (mac && f[3] != '*' && length(f[3]) > 0)
-				map[mac] = f[3];
+			if (!mac)
+				continue;
+
+			map[mac] = {
+				name: (f[3] != '*' && length(f[3]) > 0) ? f[3] : null,
+				ip: (length(f[2]) > 0) ? f[2] : null
+			};
 		}
 	}
 
 	return map;
 }
 
-/** 返回一个 mac -> 显示名的解析函数；每次请求只读一次别名与租约 */
-function hostname_resolver() {
-	let aliases = alias_map();
-	let leases = lease_map();
+/** ARP 表：补充没有 DHCP 租约（静态地址）设备的 IP */
+function arp_map() {
+	let map = {};
 
-	return function(mac) {
-		if (!mac) return UNKNOWN_NAME;
-		return aliases[mac] ?? leases[mac] ?? mac;
+	for (let line in split(trim(readfile('/proc/net/arp') ?? ''), '\n')) {
+		let f = split_ws(line);
+		if (length(f) < 4 || f[0] == 'IP')
+			continue;
+
+		let mac = normalize_mac(f[3]);
+		if (mac && mac != UNKNOWN_MAC)
+			map[mac] = f[0];
+	}
+
+	return map;
+}
+
+/**
+ * 每次请求只读一遍别名 / 租约 / ARP：
+ *   name(mac) 真实主机名或别名，取不到时返回空串（由前端决定显示成 MAC 还是"未知设备"）
+ *   ip(mac)   租约优先，其次 ARP，都没有返回 null
+ */
+function device_directory() {
+	let aliases = alias_map();
+	let leases = lease_info();
+	let arp = arp_map();
+
+	return {
+		name: function(mac) {
+			if (!mac) return UNKNOWN_NAME;
+			return aliases[mac] ?? leases[mac]?.name ?? '';
+		},
+		ip: function(mac) {
+			if (!mac) return null;
+			return leases[mac]?.ip ?? arp[mac] ?? null;
+		}
 	};
 }
 
@@ -450,7 +483,7 @@ function sort_devices(list, sortBy) {
 	        : 'total_bytes';
 
 	sort(list, function(a, b) {
-		if (sortBy == 'hostname') return cmp_str(lc(a.hostname), lc(b.hostname));
+		if (sortBy == 'hostname') return cmp_str(lc(a.hostname || a.mac), lc(b.hostname || b.mac));
 		if (sortBy == 'mac') return cmp_str(a.mac, b.mac);
 		return b[key] - a[key];    // 数值降序：比较器必须返回数值而非布尔
 	});
@@ -604,16 +637,19 @@ methods.get_devices = {
 		let keyword = trim(request.args?.keyword ?? '');
 		let days = day_list(range_days(range));
 		let result = aggregate(days);
-		let resolve = hostname_resolver();
+		let dir = device_directory();
 
 		let devices = [];
 		let kw = lc(keyword);
 
 		for (let d in result.devices) {
-			d.hostname = (d.mac == UNKNOWN_MAC) ? UNKNOWN_NAME : resolve(d.mac);
 			d.unknown_source = (d.mac == UNKNOWN_MAC);
+			d.hostname = d.unknown_source ? '' : dir.name(d.mac);
+			d.ip = d.unknown_source ? null : dir.ip(d.mac);
 
-			if (length(kw) > 0 && index(lc(d.hostname + ' ' + d.mac), kw) < 0)
+			// 关键词匹配名称、MAC 与 IP，方便直接按 IP 找设备
+			if (length(kw) > 0 &&
+			    index(lc((d.hostname ?? '') + ' ' + d.mac + ' ' + (d.ip ?? '')), kw) < 0)
 				continue;
 
 			push(devices, d);
@@ -714,7 +750,7 @@ methods.get_device = {
 
 		return {
 			mac,
-			hostname: hostname_resolver()(mac),
+			hostname: (mac == UNKNOWN_MAC) ? '' : device_directory().name(mac),
 			range,
 			proto_field: protoField,
 			days: series,
