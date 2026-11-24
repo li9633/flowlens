@@ -95,6 +95,7 @@ const api = {
 	setSettings: async () => ({ success: true }),
 	resetDatabase: async (confirm) => ({ success: confirm === true, removed: 2 }),
 	fixFullcone: async (confirm) => ({ success: confirm === true, reboot_required: true, changed: [] }),
+	repairCollector: async (confirm) => ({ success: confirm === true, restarted: true, verified: true }),
 	addPoll: () => {},
 	i18n: {
 		title: 'Traffic usage', today: 'Today', yesterday: 'Yesterday',
@@ -104,6 +105,11 @@ const api = {
 		loading: 'Loading…', error: 'Failed to load traffic data.',
 		warnTmpfs: 'Database directory is on tmpfs ({dir}), history will be lost after reboot.',
 		warnFullcone: 'A fullcone NAT module was detected, conntrack events may not reach nlbwmon.',
+		warnCollectorStalled: 'nlbwmon may have stopped counting because its netlink receive buffer is too small ({conntrack} connections). The repair raises the buffer and restarts nlbwmon.',
+		repairCollector: 'Repair collector',
+		repairingCollector: 'Repairing…',
+		repairCollectorFailed: 'Repair failed. Check the system log for details.',
+		repairCollectorPending: 'The collector was restarted; data may take a few tens of seconds to come back.',
 		warnFullconeAction: 'The fix turns off fullcone NAT (affects NAT type for P2P and online games) and never reboots the router; a manual reboot is required.',
 		warnFullconeReboot: 'fullcone is disabled; conntrack events resume after the router reboots.',
 		warnFullconeRebootHint: 'Reboot the router manually (System → Reboot).',
@@ -343,6 +349,54 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 			'修复后不提供重启按钮/链接': !elFullcone.querySelector('a[href*="reboot"]'),
 			'修复后不再显示修复按钮': !Array.from(elFullcone.querySelectorAll('button'))
 				.some((b) => b.textContent.trim() === 'Fix automatically')
+		})) {
+			console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
+			if (!pass) ok = false;
+		}
+	}
+
+	// 采集器卡死：告警必须给出可执行的修复动作，且修复后告警消失
+	const elCollector = window.document.createElement('div');
+	window.document.body.appendChild(elCollector);
+
+	let repairConfirm = null;
+
+	const collectorApi = Object.assign({}, api, {
+		getSummary: async () => ({
+			warnings: (repairConfirm === true)
+				? []
+				: [ { code: 'warnCollectorStalled', conntrack: 6787 } ],
+			ranges: [
+				{ range: 'today', days: 1, rx_bytes: 0, tx_bytes: 0, total_bytes: 0, series: [] }
+			]
+		}),
+		repairCollector: async (confirm) => {
+			repairConfirm = confirm;
+			return { success: true, restarted: true, verified: true };
+		}
+	});
+
+	window.WrtbwstatApp.mount(elCollector, collectorApi);
+	await wait(200);
+
+	const repairBtn = Array.from(elCollector.querySelectorAll('button'))
+		.find((b) => b.textContent.trim() === 'Repair collector');
+
+	for (const [ name, pass ] of Object.entries({
+		'采集器告警渲染连接数': elCollector.innerHTML.includes('6787'),
+		'采集器告警渲染修复按钮': !!repairBtn
+	})) {
+		console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
+		if (!pass) ok = false;
+	}
+
+	if (repairBtn) {
+		repairBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+		await wait(200);
+
+		for (const [ name, pass ] of Object.entries({
+			'修复采集器携带 confirm=true': repairConfirm === true,
+			'修复后告警消失': !elCollector.innerHTML.includes('6787')
 		})) {
 			console.log((pass ? 'PASS  ' : 'FAIL  ') + name);
 			if (!pass) ok = false;

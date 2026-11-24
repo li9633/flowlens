@@ -43,6 +43,30 @@ if (phase == 'read') {
 	check('collector.local_networks[0]', st.collector.local_networks[0], 'lan');
 	check('warnings.non_empty', length(st.warnings) > 0, true);
 
+	printf("\n### 采集器健康检查\n");
+	check('collector.buffer_baseline', target_netlink_buffer(0), 4194304);
+	check('collector.buffer_scaled', target_netlink_buffer(10000), 10485760);
+	check('collector.buffer_capped', target_netlink_buffer(1000000), 67108864);
+
+	// 卡死判定需要"守护进程在跑"，用 hint 模拟，避免依赖容器里的套接字路径
+	let cw = collect_warnings({ today_error: 'bad file descriptor', conntrack: 100, daemon_present: true });
+	let stalled = false;
+	for (let w in cw)
+		if (w.code == 'warnCollectorStalled') stalled = true;
+	check('warnings.collector_stalled', stalled, true);
+
+	// 没有连接时今日为空是正常现象，不能误报
+	let cw2 = collect_warnings({ today_error: 'bad file descriptor', conntrack: 0, daemon_present: true });
+	let cw3 = collect_warnings({ today_error: 'bad file descriptor', conntrack: 100, daemon_present: false });
+	let stalled2 = false;
+	let stalled3 = false;
+	for (let w in cw2)
+		if (w.code == 'warnCollectorStalled') stalled2 = true;
+	for (let w in cw3)
+		if (w.code == 'warnCollectorStalled') stalled3 = true;
+	check('warnings.collector_no_false_positive', stalled2, false);
+	check('warnings.collector_daemon_down', stalled3, false);
+
 	printf("\n### get_summary（窗口与逐日枚举）\n");
 	let sum = methods.get_summary.call({ args: { range: 'last7' } });
 	let want = { today: 1510, yesterday: 1510, last7: 10570, last30: 45300, last90: 135900 };
@@ -205,6 +229,11 @@ else {
 	check('reset.removed', reset.removed, 3);
 	check('reset.freed_bytes', reset.freed_bytes > 0, true);
 	check('reset.directory', reset.directory, '/srv/nlbw/wrtbwstat');
+
+	printf("\n### repair_collector\n");
+	let rpDeny = methods.repair_collector.call({ args: { confirm: false } });
+	check('repair.denied_without_confirm', rpDeny.success, false);
+	check('repair.denied_code', rpDeny.message.code, 'errFixConfirm');
 
 	printf("\n### fix_fullcone\n");
 	let fcDeny = methods.fix_fullcone.call({ args: { confirm: false } });

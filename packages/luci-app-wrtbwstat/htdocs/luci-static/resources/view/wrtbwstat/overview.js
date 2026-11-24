@@ -75,6 +75,11 @@ const ZH = {
 	'Database directory is on tmpfs ({dir}), history will be lost after reboot.': '数据库目录位于 tmpfs（{dir}），重启后历史数据会丢失。',
 	'nf_conntrack_acct is disabled, counters may be missing or low.': '未开启 nf_conntrack_acct，流量计数可能缺失或偏低。',
 	'A fullcone NAT module was detected, conntrack events may not reach nlbwmon.': '检测到 fullcone NAT 模块，conntrack 事件可能无法送达 nlbwmon。',
+	'nlbwmon may have stopped counting because its netlink receive buffer is too small ({conntrack} connections). The repair raises the buffer and restarts nlbwmon.': 'nlbwmon 可能因接收缓冲不足已停止计数（当前 {conntrack} 条连接）。修复会调大缓冲并重启 nlbwmon。',
+	'Repair collector': '修复采集器',
+	'Repairing…': '正在修复…',
+	'Repair failed. Check the system log for details.': '修复失败，请检查系统日志。',
+	'The collector was restarted; data may take a few tens of seconds to come back.': '采集器已重启，数据可能需要几十秒才能恢复。',
 	'fullcone and nlbwmon are mutually exclusive on this firmware: once the module is loaded, statistics stay at zero. The fix turns off fullcone NAT (affects NAT type for P2P and online games) and disables the kernel module. It only changes files and never reboots the router; a manual reboot is required.': 'fullcone 与 nlbwmon 在本固件上互斥：模块一旦加载，统计会一直是 0。修复会关闭 fullcone NAT（影响 P2P / 游戏联机的 NAT 类型）并禁用该内核模块。操作只改文件、不会自动重启，需要你手动重启路由器才生效。',
 	'fullcone is disabled; conntrack events resume after the router reboots.': 'fullcone 已禁用，重启路由器后 conntrack 事件才会恢复。',
 	'Reboot the router manually (System → Reboot); statistics resume after that. Counters before the reboot are not recovered.': '请手动重启路由器（系统 → 重启）后恢复统计；重启前的计数不会补回。',
@@ -148,6 +153,12 @@ const callFixFullcone = rpc.declare({
 	params: [ 'confirm' ]
 });
 
+const callRepairCollector = rpc.declare({
+	object: 'luci.wrtbwstat',
+	method: 'repair_collector',
+	params: [ 'confirm' ]
+});
+
 function loadStyle() {
 	if (document.querySelector('link[data-wrtbwstat-style]'))
 		return;
@@ -205,6 +216,7 @@ return view.extend({
 			setSettings: callSetSettings,
 			resetDatabase: callResetDatabase,
 			fixFullcone: callFixFullcone,
+			repairCollector: callRepairCollector,
 			addPoll: poll.add,
 			// 文案在 view 侧用 _() 注入：LuCI 的翻译扫描器不解析 .vue 文件
 			i18n: {
@@ -268,6 +280,11 @@ return view.extend({
 				warnTmpfs: T('Database directory is on tmpfs ({dir}), history will be lost after reboot.'),
 				warnAcctOff: T('nf_conntrack_acct is disabled, counters may be missing or low.'),
 				warnFullcone: T('A fullcone NAT module was detected, conntrack events may not reach nlbwmon.'),
+				warnCollectorStalled: T('nlbwmon may have stopped counting because its netlink receive buffer is too small ({conntrack} connections). The repair raises the buffer and restarts nlbwmon.'),
+				repairCollector: T('Repair collector'),
+				repairingCollector: T('Repairing…'),
+				repairCollectorFailed: T('Repair failed. Check the system log for details.'),
+				repairCollectorPending: T('The collector was restarted; data may take a few tens of seconds to come back.'),
 				warnFullconeAction: T('fullcone and nlbwmon are mutually exclusive on this firmware: once the module is loaded, statistics stay at zero. The fix turns off fullcone NAT (affects NAT type for P2P and online games) and disables the kernel module. It only changes files and never reboots the router; a manual reboot is required.'),
 				warnFullconeReboot: T('fullcone is disabled; conntrack events resume after the router reboots.'),
 				warnFullconeRebootHint: T('Reboot the router manually (System → Reboot); statistics resume after that. Counters before the reboot are not recovered.'),

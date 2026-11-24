@@ -142,6 +142,21 @@ msgstr "未开启 nf_conntrack_acct，流量计数可能缺失或偏低。"
 msgid "A fullcone NAT module was detected, conntrack events may not reach nlbwmon."
 msgstr "检测到 fullcone NAT 模块，conntrack 事件可能无法送达 nlbwmon。"
 
+msgid "nlbwmon may have stopped counting because its netlink receive buffer is too small ({conntrack} connections). The repair raises the buffer and restarts nlbwmon."
+msgstr "nlbwmon 可能因接收缓冲不足已停止计数（当前 {conntrack} 条连接）。修复会调大缓冲并重启 nlbwmon。"
+
+msgid "Repair collector"
+msgstr "修复采集器"
+
+msgid "Repairing…"
+msgstr "正在修复…"
+
+msgid "Repair failed. Check the system log for details."
+msgstr "修复失败，请检查系统日志。"
+
+msgid "The collector was restarted; data may take a few tens of seconds to come back."
+msgstr "采集器已重启，数据可能需要几十秒才能恢复。"
+
 msgid "fullcone and nlbwmon are mutually exclusive on this firmware: once the module is loaded, statistics stay at zero. The fix turns off fullcone NAT (affects NAT type for P2P and online games) and disables the kernel module. It only changes files and never reboots the router; a manual reboot is required."
 msgstr "fullcone 与 nlbwmon 在本固件上互斥：模块一旦加载，统计会一直是 0。修复会关闭 fullcone NAT（影响 P2P / 游戏联机的 NAT 类型）并禁用该内核模块。操作只改文件、不会自动重启，需要你手动重启路由器才生效。"
 

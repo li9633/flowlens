@@ -20,7 +20,8 @@
 				"luci.wrtbwstat": [
 					"set_settings",
 					"reset_database",
-					"fix_fullcone"
+					"fix_fullcone",
+					"repair_collector"
 				]
 			},
 			"uci": [

@@ -66,6 +66,11 @@ const I18N = {
 	warnNoDirectory: 'nlbwmon 未配置数据库目录。',
 	warnAcctOff: 'nf_conntrack_acct 未开启，计数可能缺失或偏低。',
 	warnFullcone: '检测到 fullcone NAT 模块，可能导致 conntrack 事件无法送达 nlbwmon。',
+	warnCollectorStalled: 'nlbwmon 可能因接收缓冲不足已停止计数（当前 {conntrack} 条连接）。修复会调大缓冲并重启 nlbwmon。',
+	repairCollector: '修复采集器',
+	repairingCollector: '正在修复…',
+	repairCollectorFailed: '修复失败，请检查系统日志。',
+	repairCollectorPending: '采集器已重启，数据可能需要几十秒才能恢复。',
 	warnFullconeAction: 'fullcone 与 nlbwmon 在本固件上互斥：模块一旦加载，统计会一直是 0。修复会关闭 fullcone NAT（影响 P2P / 游戏联机的 NAT 类型）并禁用该内核模块。操作只改文件、不会自动重启，需要你手动重启路由器才生效。',
 	warnFullconeReboot: 'fullcone 已禁用，重启路由器后 conntrack 事件才会恢复。',
 	warnFullconeRebootHint: '请手动重启路由器（系统 → 重启）后恢复统计；重启前的计数不会补回。',
@@ -231,6 +236,21 @@ export function createMockApi() {
 				changed: [ 'firewall.fullcone', '/lib/modules/6.12.103/nft_fullcone.ko' ],
 				reboot_required: true,
 				backup_dir: '/etc/wrtbwstat/backup/fullcone-20261118-223000'
+			};
+		},
+
+		async repairCollector(confirm) {
+			if (confirm !== true)
+				return { success: false, message: { code: 'errFixConfirm' } };
+
+			return {
+				success: true,
+				restarted: true,
+				verified: true,
+				conntrack: 6787,
+				buffer_bytes: 4194304,
+				buffer_changed: true,
+				rmem_max: 8388608
 			};
 		},
 

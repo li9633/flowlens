@@ -89,6 +89,37 @@ async function onFixFullcone() {
 	}
 }
 
+// 采集器卡死只能靠重启 nlbwmon 恢复（缓冲只在进程启动时生效），
+// 会丢弃尚未落盘的计数，因此同样由用户点按钮触发。
+const repairing = ref(false);
+const repairError = ref('');
+
+async function onRepairCollector() {
+	repairing.value = true;
+	repairError.value = '';
+
+	try {
+		const res = await props.api.repairCollector(true);
+
+		if (!res || res.success !== true) {
+			repairError.value = res?.message ? tm(res.message) : t('repairCollectorFailed');
+			return;
+		}
+
+		await load();
+
+		// 重启后首次 dump 可能还没完成，告警会保留，提示用户稍等
+		if (res.verified === false)
+			repairError.value = t('repairCollectorPending');
+	}
+	catch (e) {
+		repairError.value = '' + e;
+	}
+	finally {
+		repairing.value = false;
+	}
+}
+
 onMounted(async function() {
 	await load();
 	startPolling();
@@ -131,6 +162,19 @@ onMounted(async function() {
 							</BaseButton>
 						</div>
 						<div v-if="fixError" class="fl-warn-error">{{ fixError }}</div>
+					</template>
+					<template v-else-if="w.code === 'warnCollectorStalled'">
+						{{ tm(w) }}
+						<div class="fl-warn-actions">
+							<BaseButton
+								variant="primary"
+								:disabled="repairing"
+								@click="onRepairCollector"
+							>
+								{{ repairing ? t('repairingCollector') : t('repairCollector') }}
+							</BaseButton>
+						</div>
+						<div v-if="repairError" class="fl-warn-error">{{ repairError }}</div>
 					</template>
 					<template v-else>{{ tm(w) }}</template>
 				</li>

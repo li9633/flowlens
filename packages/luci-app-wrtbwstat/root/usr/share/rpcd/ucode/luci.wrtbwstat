@@ -45,6 +45,19 @@ const DEFAULT_RETENTION_DAYS = 95;
 const DEFAULT_REFRESH_INTERVAL = 30;
 
 /*
+ * nlbwmon 用 netlink 接收 conntrack 事件，并用一次性 dump 做初始对齐。
+ * dump 的长度随连接数增长，而接收缓冲由 -b 固定（OpenWrt 默认仅 512KB）。
+ * 缓冲不足时内核丢消息（ENOBUFS），nlbwmon 会反复全量 dump 试图对齐，
+ * 但每次都再次溢出，于是永久停止计数、只写出空库，必须重启进程才能恢复。
+ * 这里给出插件认为安全的基线，以及按当前连接数反推的目标值。
+ */
+const NETLINK_BUFFER_MIN = 4194304;      // 4MB
+const NETLINK_BUFFER_MAX = 67108864;     // 64MB，防止异常连接数把内存打满
+const NETLINK_BUFFER_DEFAULT = 524288;   // OpenWrt init 脚本的默认值
+const NETLINK_BYTES_PER_CONN = 512;      // 带 accounting 的单条 conntrack 估算
+const NETLINK_SOCKET = '/var/run/nlbwmon.sock';
+
+/*
  * 存储布局：settings.storage_dir 只是父目录，nlbwmon 的库落在它的 wrtbwstat/
  * 子目录里。这样目录里只有自己写的库文件，清空时按目录整体处理也不会碰到
  * 用户的其他数据（storage_dir 可以放心指向 /mnt/usb 这类盘根）。
@@ -548,7 +561,7 @@ function device_directory() {
 // 聚合
 // ---------------------------------------------------------------------------
 
-/** 单日按 MAC 汇总：{ mac: { rx_bytes, tx_bytes, conns } } */
+/** 单日按 MAC 汇总：{ devs: { mac: { rx_bytes, tx_bytes, conns } }, error } */
 function day_by_mac(day) {
 	let out = {};
 	let q = nlbw_query(day, 'mac');
@@ -566,7 +579,7 @@ function day_by_mac(day) {
 		e.conns += num(r.conns);
 	}
 
-	return out;
+	return { devs: out, error: q.error ?? null };
 }
 
 /**
@@ -678,7 +691,8 @@ function rollup_build(range) {
 	let total = 0;
 
 	for (let day in days) {
-		let t = merge_day(devs, day_by_mac(day));
+		let per = day_by_mac(day);
+		let t = merge_day(devs, per.devs);
 		total += t.rx_bytes + t.tx_bytes;
 		push(dayTotals, [ day, t.rx_bytes, t.tx_bytes ]);
 	}
@@ -711,8 +725,9 @@ function rollup_build(range) {
 /**
  * 取一个时间窗的完整聚合。
  *
- * ctx 是本次请求内的单日缓存（day -> { mac: ... }），
+ * ctx 是本次请求内的单日缓存（day -> day_by_mac 的结果），
  * get_summary 要算 5 个窗口，共享它可避免重复查询今天/昨天。
+ * errors 只收录实时账期（昨天/今天）的查询错误，供采集链路告警使用。
  */
 function range_data(range, ctx) {
 	ctx = ctx ?? {};
@@ -721,6 +736,7 @@ function range_data(range, ctx) {
 	let devs = {};
 	let total = 0;
 	let dayTotals = {};
+	let errors = {};
 	let roll = null;
 
 	if (length(frozen_days(range)) > 0) {
@@ -746,12 +762,15 @@ function range_data(range, ctx) {
 		if (per == null)
 			per = ctx[day] = day_by_mac(day);
 
-		let t = merge_day(devs, per);
+		if (per.error)
+			errors[day] = per.error;
+
+		let t = merge_day(devs, per.devs);
 		dayTotals[day] = t;
 		total += t.rx_bytes + t.tx_bytes;
 	}
 
-	return { days, devs, total, dayTotals };
+	return { days, devs, total, dayTotals, errors };
 }
 
 function sort_devices(list, sortBy) {
@@ -788,6 +807,39 @@ function uci_get(config, section, option) {
 	catch (e) {
 		return null;
 	}
+}
+
+function conntrack_count() {
+	let raw = trim(readfile('/proc/sys/net/netfilter/nf_conntrack_count') ?? '');
+	return is_digits(raw) ? +raw : 0;
+}
+
+function configured_netlink_buffer() {
+	let raw = trim(uci_get('nlbwmon', '@nlbwmon[0]', 'netlink_buffer_size') ?? '');
+	let v = is_digits(raw) ? +raw : 0;
+
+	return (v > 0) ? v : NETLINK_BUFFER_DEFAULT;
+}
+
+/** 目标缓冲：至少 4MB，并给当前连接数留 2 倍余量，向上取整到 1MB */
+function target_netlink_buffer(count) {
+	let need = count * NETLINK_BYTES_PER_CONN * 2;
+	let target = (need > NETLINK_BUFFER_MIN) ? need : NETLINK_BUFFER_MIN;
+
+	target = int((target + 1048575) / 1048576) * 1048576;
+
+	return (target > NETLINK_BUFFER_MAX) ? NETLINK_BUFFER_MAX : target;
+}
+
+/** 探测今日活跃库能否读取：守护进程卡死时 nlbw 以非 0 退出（实测 247） */
+function probe_today() {
+	let bin = nlbw_bin();
+	if (!bin)
+		return { ok: false, rc: -1 };
+
+	let res = run(sprintf('%s -c json -n -g mac 2>/dev/null', bin));
+
+	return { ok: (res.rc == 0), rc: res.rc };
 }
 
 /*
@@ -1029,8 +1081,16 @@ function capacity_cleanup(stats) {
 	return stats;
 }
 
-/** 采集链路风险提示，供页面顶部告警条消费 */
-function collect_warnings() {
+/**
+ * 采集链路风险提示，供页面顶部告警条消费。
+ *
+ * hints.today_error 由 get_summary 透传今日活跃库的读取错误；只有同时满足
+ * "守护进程在跑（控制套接字存在）" 与 "conntrack 里确实有连接" 才判定为
+ * 采集器卡死，避免把空闲路由器的空数据误报成故障。
+ */
+function collect_warnings(hints) {
+	hints = hints ?? {};
+
 	let warnings = [];
 	let info = collector_info();
 
@@ -1046,6 +1106,12 @@ function collect_warnings() {
 	let acct = trim(readfile('/proc/sys/net/netfilter/nf_conntrack_acct') ?? '');
 	if (acct != '1')
 		push(warnings, { code: 'warnAcctOff' });
+
+	let count = (hints.conntrack != null) ? +hints.conntrack : conntrack_count();
+	let daemon = (hints.daemon_present != null) ? hints.daemon_present : access(NETLINK_SOCKET);
+
+	if (info.binary_present && hints.today_error && count > 0 && daemon)
+		push(warnings, { code: 'warnCollectorStalled', conntrack: count });
 
 	// 模块已禁用但还没重启时，事件仍然是断的——文案要区分"去修复"和"去重启"
 	let fc = fullcone_state();
@@ -1155,7 +1221,10 @@ methods.get_summary = {
 			days_with_data: withData,
 			ranges,
 			capacity,
-			warnings: collect_warnings(),
+			warnings: collect_warnings({
+				today_error: data.errors[today()] ?? null,
+				conntrack: conntrack_count()
+			}),
 			errors: nlbw_bin() ? [] : [ 'nlbw 不可用，全部数据为空。' ]
 		};
 	}
@@ -1666,6 +1735,68 @@ methods.fix_fullcone = {
 			failed,
 			reboot_required: after.loaded,
 			backup_dir: dir
+		};
+	}
+};
+
+/*
+ * 修复"采集器卡死"：把 netlink 接收缓冲抬到安全值并重启 nlbwmon。
+ *
+ * nlbwmon 的缓冲只在启动时生效，运行中无法自愈；卡死状态下内存里的计数
+ * 本来就是无效的，重启不会损失可用数据。已落盘的空账期无法补回。
+ */
+methods.repair_collector = {
+	args: { confirm: false },
+	call: function(request) {
+		if (request.args?.confirm !== true)
+			return { success: false, message: { code: 'errFixConfirm' } };
+
+		let count = conntrack_count();
+		let target = target_netlink_buffer(count);
+		let rmem = target * 2;
+		let rmem_now = +(trim(readfile('/proc/sys/net/core/rmem_max') ?? '') || 0);
+
+		// SO_RCVBUF 会被内核翻倍后与 rmem_max 取小，先保证上限足够
+		if (rmem_now < rmem) {
+			run(sprintf('sysctl -w net.core.rmem_max=%d >/dev/null 2>&1', rmem));
+			rmem_now = +(trim(readfile('/proc/sys/net/core/rmem_max') ?? '') || 0);
+		}
+
+		// 只抬不降：用户设过更大的值就保留
+		let old = configured_netlink_buffer();
+		let buffer_changed = false;
+
+		if (old < target) {
+			try {
+				let ctx = cursor();
+				ctx.load('nlbwmon');
+				ctx.set('nlbwmon', '@nlbwmon[0]', 'netlink_buffer_size', sprintf('%d', target));
+				ctx.commit('nlbwmon');
+				buffer_changed = true;
+			}
+			catch (e) {
+				return { success: false, message: { code: 'errWrite', detail: '' + e } };
+			}
+		}
+
+		let restart = run('/etc/init.d/nlbwmon restart >/dev/null 2>&1');
+
+		// 缓存里可能已经记住了空账期，清掉让下一次请求重新查询
+		cache_clear();
+
+		// 给守护进程一点时间完成首次 conntrack dump 再验证
+		run('sleep 2');
+
+		let probe = probe_today();
+
+		return {
+			success: (restart.rc == 0),
+			restarted: (restart.rc == 0),
+			verified: probe.ok,
+			conntrack: count,
+			buffer_bytes: configured_netlink_buffer(),
+			buffer_changed,
+			rmem_max: rmem_now
 		};
 	}
 };

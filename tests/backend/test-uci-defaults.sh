@@ -40,6 +40,8 @@ chk database_interval '2026-01-01/1'
 chk database_generations '95'
 chk commit_interval '6h'
 chk database_compress '1'
+# 连接数增长后 512KB 会让 conntrack dump 溢出，基线必须抬到 4MB
+chk netlink_buffer_size '4194304'
 # 原值是 tmpfs 路径，脚本应当把它替换为持久化目录下的插件独占子目录
 chk database_directory '/mnt/usb/wrtbwstat'
 
